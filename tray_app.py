@@ -45,6 +45,7 @@ class TrayApp:
         self._quit_event       = threading.Event()      # set when app should exit
         self._settings_thread: Optional[threading.Thread] = None
         self._sb_thread:       Optional[threading.Thread] = None
+        self._icon_lock        = threading.Lock()       # guards cross-thread icon updates
 
         # Check VB-CABLE on startup
         self._vbc_index = find_vbcable_device()
@@ -74,6 +75,15 @@ class TrayApp:
             name="VocalClear-tray",
         )
         tray_thread.start()
+
+        # Keepalive: refresh the tray icon tooltip every 30 s so Windows
+        # doesn't auto-hide it to the overflow after a period of inactivity.
+        keepalive_thread = threading.Thread(
+            target=self._icon_keepalive,
+            daemon=True,
+            name="VocalClear-tray-keepalive",
+        )
+        keepalive_thread.start()
 
         # Main window — runs on the main thread (required by tkinter/Win32)
         from main_window import MainWindow
@@ -146,6 +156,17 @@ class TrayApp:
                 _log_err("[TrayApp] Tray icon lost — restarting in 2 s")
                 time.sleep(2)
 
+    def _icon_keepalive(self) -> None:
+        """Refresh the tray icon every 30 s to prevent Windows auto-hiding it."""
+        while not self._quit_event.wait(timeout=30):
+            try:
+                if self._icon and self._icon.visible:
+                    # NIM_MODIFY with NIF_TIP — lightweight, thread-safe,
+                    # no HICON involved. Keeps the notification-area slot alive.
+                    self._icon.title = self._tooltip()
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Engine lifecycle
     # ------------------------------------------------------------------
@@ -167,13 +188,14 @@ class TrayApp:
         self._active = not self._active
         self.noise_filter.enabled = self._active
         self.config["enabled"]    = self._active
-        try:
-            if self._icon:
-                self._icon.icon  = draw_icon(64, active=self._active)
-                self._icon.title = self._tooltip()
-                self._icon.update_menu()
-        except Exception:
-            pass   # icon might be restarting
+        with self._icon_lock:
+            try:
+                if self._icon:
+                    self._icon.icon  = draw_icon(64, active=self._active)
+                    self._icon.title = self._tooltip()
+                    self._icon.update_menu()
+            except Exception:
+                pass   # icon might be restarting
         if self._main_window:
             self._main_window.refresh_status()
 
@@ -248,16 +270,17 @@ class TrayApp:
                              snapper=self._snapper)
         win.run()
         # Sync state after settings close
-        try:
-            if self._icon:
-                self._active = self.config["enabled"]
-                self.noise_filter.enabled  = self._active
-                self.noise_filter.strength = self.config["strength"]
-                self._icon.icon  = draw_icon(64, active=self._active)
-                self._icon.title = self._tooltip()
-                self._icon.update_menu()
-        except Exception:
-            pass
+        with self._icon_lock:
+            try:
+                if self._icon:
+                    self._active = self.config["enabled"]
+                    self.noise_filter.enabled  = self._active
+                    self.noise_filter.strength = self.config["strength"]
+                    self._icon.icon  = draw_icon(64, active=self._active)
+                    self._icon.title = self._tooltip()
+                    self._icon.update_menu()
+            except Exception:
+                pass
         if self._main_window:
             self._main_window.refresh_status()
             self._main_window.refresh_output_device()
