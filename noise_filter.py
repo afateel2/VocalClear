@@ -215,8 +215,10 @@ class NoiseFilter:
         frames = combined[:n_full].reshape(-1, _RNNOISE_FRAME)
         chunks: list[np.ndarray] = []
 
-        # VAD gate threshold: strength 0 → 0.10, strength 1 → 0.50
-        vad_thresh = 0.10 + 0.40 * self.strength
+        # VAD gate threshold: strength 0 → 0.20, strength 1 → 0.70
+        # Higher base prevents speaker bleed (friends' voices picked up by mic)
+        # from opening the gate when the user is silent.
+        vad_thresh = 0.20 + 0.50 * self.strength
 
         for frame in frames:
             # process_mono_frame: float32 [-1,1] in → (int16 denoised, speech_prob)
@@ -233,9 +235,10 @@ class NoiseFilter:
                 fade = self._hold_ctr / _HOLD_FRAMES
                 chunks.append(denoised_f * fade)
             else:
-                # Non-speech frame: reduce to near silence (not hard zero
-                # to avoid abrupt clicks on unexpected speech onset)
-                chunks.append(denoised_f * 0.05)
+                # Non-speech: complete silence. The 200 ms fade-out from the
+                # hold counter already smooths the transition, so hard zero
+                # here causes no clicks and prevents all speaker bleed-through.
+                chunks.append(np.zeros_like(denoised_f))
 
         if not chunks:
             return audio.copy()
