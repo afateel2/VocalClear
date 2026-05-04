@@ -82,6 +82,7 @@ class AudioEngine:
         self._calib_buffer:  list[np.ndarray] = []
         self._calib_done_cb: Optional[Callable] = None
         self._calib_target:  int = 0
+        self._calib_samples: int = 0
 
         # Status / monitoring
         self.last_error:         Optional[str] = None   # startup/device errors only
@@ -221,6 +222,7 @@ class AudioEngine:
     def start_calibration(self, duration_s: float = 3.0,
                           done_cb: Optional[Callable] = None) -> None:
         self._calib_buffer.clear()
+        self._calib_samples = 0
         self._calib_target  = int(duration_s * self.noise_filter.sample_rate)
         self._calib_done_cb = done_cb
         self._calibrating   = True
@@ -255,11 +257,12 @@ class AudioEngine:
         # ── Calibration ───────────────────────────────────────────────────────
         if self._calibrating:
             self._calib_buffer.append(mono.copy())
-            accumulated = np.concatenate(self._calib_buffer)
-            if len(accumulated) >= self._calib_target:
-                self.noise_filter.update_noise_profile(accumulated)
-                self._calibrating = False
+            self._calib_samples += len(mono)
+            if self._calib_samples >= self._calib_target:
+                self.noise_filter.update_noise_profile(np.concatenate(self._calib_buffer))
+                self._calibrating   = False
                 self._calib_buffer.clear()
+                self._calib_samples = 0
                 if self._calib_done_cb:
                     threading.Thread(
                         target=self._calib_done_cb, daemon=True).start()

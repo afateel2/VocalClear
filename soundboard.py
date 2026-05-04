@@ -32,7 +32,6 @@ import ctypes.wintypes
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import resample_poly
 
 # Log file for diagnostics (print() is swallowed by pythonw.exe)
 _LOG_FILE = Path.home() / ".vocalclear" / "vocalclear.log"
@@ -646,6 +645,7 @@ def _decode(path: Path) -> np.ndarray:
 
 
 def _resample(data: np.ndarray, from_sr: int, to_sr: int) -> np.ndarray:
+    from scipy.signal import resample_poly  # lazy: only imported on first file load
     g = gcd(from_sr, to_sr)
     up, down = to_sr // g, from_sr // g
     return resample_poly(data, up, down).astype(np.float32)

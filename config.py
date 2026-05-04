@@ -108,7 +108,11 @@ class Config:
                 winreg.KEY_SET_VALUE,
             )
             if enabled:
-                cmd = f'"{sys.executable}" "{MAIN_SCRIPT}"'
+                if getattr(sys, "frozen", False):
+                    # PyInstaller exe: sys.executable IS the exe; no script arg needed
+                    cmd = f'"{sys.executable}"'
+                else:
+                    cmd = f'"{sys.executable}" "{MAIN_SCRIPT}"'
                 winreg.SetValueEx(key, self._REG_NAME, 0, winreg.REG_SZ, cmd)
             else:
                 try:

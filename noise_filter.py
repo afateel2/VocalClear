@@ -21,7 +21,6 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from scipy import signal as scipy_signal
 
 
 # RNNoise processes exactly 480 samples per frame at 48 kHz (10 ms)
@@ -113,6 +112,8 @@ class NoiseFilter:
     # ------------------------------------------------------------------ #
 
     def _init_wiener(self) -> None:
+        from scipy import signal as scipy_signal  # lazy: only loaded if Wiener is needed
+
         self.n_fft     = 512    # 10.7 ms at 48 kHz — was 2048 (42 ms), huge latency cut
         self.hop       = self.n_fft // 2
         self.window    = np.hanning(self.n_fft).astype(np.float32)
@@ -121,10 +122,9 @@ class NoiseFilter:
         nyq  = self.sample_rate / 2.0
         low  = 80.0 / nyq
         high = min(8000.0 / nyq, 0.98)
-        self._bp_sos = scipy_signal.butter(
-            4, [low, high], btype="band", output="sos")
-        self._bp_zi  = scipy_signal.sosfilt_zi(
-            self._bp_sos).astype(np.float32)
+        self._bp_sos    = scipy_signal.butter(4, [low, high], btype="band", output="sos")
+        self._bp_zi     = scipy_signal.sosfilt_zi(self._bp_sos).astype(np.float32)
+        self._sosfilt   = scipy_signal.sosfilt  # store to avoid per-call module lookup
 
         self.noise_psd: Optional[np.ndarray] = None
         self._calibration_frames: list       = []
@@ -259,7 +259,7 @@ class NoiseFilter:
             self._prev_input = audio[-self.hop:].copy()
             return audio.copy()
 
-        filtered, self._bp_zi = scipy_signal.sosfilt(
+        filtered, self._bp_zi = self._sosfilt(
             self._bp_sos, audio, zi=self._bp_zi)
 
         extended = np.concatenate([

@@ -615,7 +615,7 @@ class SoundBoardWindow:
         paths = filedialog.askopenfilenames(
             title="Add Sound Files", parent=self._root,
             filetypes=[
-                ("Audio files", "*.mp3 *.ogg *.m4a"),
+                ("Audio files", "*.mp3 *.ogg *.m4a *.wav *.flac"),
                 ("All files",   "*.*"),
             ],
         )
