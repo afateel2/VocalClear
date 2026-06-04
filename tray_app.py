@@ -50,7 +50,7 @@ def _pil_to_qicon(pil_img) -> QIcon:
 
 
 class TrayApp:
-    def __init__(self):
+    def __init__(self, prev_crashed: bool = False):
         self.config       = Config()
         self.noise_filter = NoiseFilter(sample_rate=self.config["sample_rate"])
         self.noise_filter.strength = self.config["strength"]
@@ -58,8 +58,9 @@ class TrayApp:
 
         self.engine = AudioEngine(self.config, self.noise_filter)
 
-        self._active:    bool          = self.config["enabled"]
-        self._error_msg: Optional[str] = None
+        self._active:       bool          = self.config["enabled"]
+        self._error_msg:    Optional[str] = None
+        self._prev_crashed: bool          = prev_crashed
 
         # Check VB-CABLE on startup
         self._vbc_index = find_vbcable_device()
@@ -110,9 +111,11 @@ class TrayApp:
         # Show main window on launch
         self._main_window.show()
 
-        # Notify if engine failed
+        # Notify if engine failed or previous session crashed
         if self._error_msg:
             QTimer.singleShot(1000, self._notify_engine_error)
+        elif self._prev_crashed:
+            QTimer.singleShot(2000, self._notify_prev_crash)
 
         app.exec()
 
@@ -197,6 +200,16 @@ class TrayApp:
                 "Open Settings → Apply & Restart Audio to retry.",
                 QSystemTrayIcon.MessageIcon.Critical,
                 5000,
+            )
+
+    def _notify_prev_crash(self) -> None:
+        if self._tray:
+            _log("Tray notification shown: previous session did not exit cleanly")
+            self._tray.showMessage(
+                "VocalClear",
+                "Last session ended unexpectedly.\nSee the log for details.",
+                QSystemTrayIcon.MessageIcon.Warning,
+                4000,
             )
 
     # ──────────────────────────────────────────────────────────────────────────

@@ -431,9 +431,10 @@ class SoundBoard:
                 per_sound[name] = {"volume": snd.volume}
         cfg = {
             "_global": {
-                "master_volume":  self.master_volume,
-                "monitor_volume": self.monitor_volume,
-                "overlap":        self.overlap,
+                "master_volume":   self.master_volume,
+                "monitor_volume":  self.monitor_volume,
+                "overlap":         self.overlap,
+                "monitor_enabled": self._monitor_enabled,
             },
             **per_sound,
         }
@@ -462,6 +463,8 @@ class SoundBoard:
                 self.monitor_volume = float(g["monitor_volume"])
             if "overlap" in g:
                 self.overlap = bool(g["overlap"])
+            if "monitor_enabled" in g:
+                self.monitor_enabled = bool(g["monitor_enabled"])
             return raw
         except Exception:
             return {}

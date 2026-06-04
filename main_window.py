@@ -221,8 +221,14 @@ class _VUMeter(QWidget):
         self._peak_out     = 0.0
         self._peak_in_hold = 0
         self._peak_out_hold= 0
+        self._paused       = False
         self.setMinimumHeight(105)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_paused(self, paused: bool) -> None:
+        if paused != self._paused:
+            self._paused = paused
+            self.update()
 
     def update_levels(self, in_rms: float, out_rms: float) -> None:
         self.in_rms  = in_rms
@@ -284,14 +290,13 @@ class _VUMeter(QWidget):
             by  = y0 + h - (i + 1) * step
             row = QRect(x0, by, w, seg_h)
 
-            if i < filled:
+            if i < filled and not self._paused:
                 if i < int(n * 0.63):
                     col = C_GREEN
                 elif i < int(n * 0.82):
                     col = C_AMBER
                 else:
                     col = C_RED
-                # Lighten the topmost filled bar (visual "tip")
                 if i == filled - 1:
                     col = col.lighter(140)
                 p.fillRect(row, col)
@@ -304,8 +309,8 @@ class _VUMeter(QWidget):
                     col = C_RED_DIM
                 p.fillRect(row, col)
 
-            # Peak hold: 1 px bright line at the peak segment top
-            if i == peak_i and peak > 0.008:
+            # Peak hold suppressed when paused
+            if i == peak_i and peak > 0.008 and not self._paused:
                 if peak_i < int(n * 0.63):
                     pc = C_GREEN.lighter(170)
                 elif peak_i < int(n * 0.82):
@@ -585,6 +590,8 @@ class MainWindow(QMainWindow):
         self._status_chip:Optional[_StatusChip]    = None
         self._toggle_btn: Optional[_IconButton]    = None
         self._db_lbl:     Optional[QLabel]         = None
+        self._last_xrun:  int                      = 0
+        self._xrun_flash: int                      = 0   # ticks remaining for amber flash
 
         self._build_ui()
         _apply_dark_titlebar(int(self.winId()))
@@ -785,6 +792,8 @@ class MainWindow(QMainWindow):
         active = self.noise_filter.enabled
         if self._status_chip:
             self._status_chip.set_active(active)
+        if self._vu_meter:
+            self._vu_meter.set_paused(not active)
         if self._toggle_btn:
             if active:
                 self._toggle_btn.set_icon("pause")
@@ -843,14 +852,28 @@ class MainWindow(QMainWindow):
     # ── Animation tick ────────────────────────────────────────────────────────
 
     def _tick(self) -> None:
+        active  = self.noise_filter.enabled
         in_rms  = getattr(self.engine, "input_rms",  0.0)
         out_rms = getattr(self.engine, "output_rms", 0.0)
         if self._vu_meter:
+            self._vu_meter.set_paused(not active)
             self._vu_meter.update_levels(in_rms, out_rms)
         if self._history:
             self._history.push(in_rms, out_rms)
         if self._db_lbl:
-            self._db_lbl.setText(
-                f"IN  {_rms_to_db(in_rms):+.1f} dB       OUT  {_rms_to_db(out_rms):+.1f} dB")
+            cur_xrun = getattr(self.engine, "xrun_count", 0)
+            if cur_xrun > self._last_xrun:
+                self._last_xrun  = cur_xrun
+                self._xrun_flash = 40   # 40 × 50 ms = 2 s
+            if self._xrun_flash > 0:
+                self._xrun_flash -= 1
+                self._db_lbl.setStyleSheet("color: #ffb300;")
+                self._db_lbl.setText(
+                    f"IN  {_rms_to_db(in_rms):+.1f} dB       OUT  {_rms_to_db(out_rms):+.1f} dB"
+                    f"   ⚠ xrun")
+            else:
+                self._db_lbl.setStyleSheet("color: #3a6642;")
+                self._db_lbl.setText(
+                    f"IN  {_rms_to_db(in_rms):+.1f} dB       OUT  {_rms_to_db(out_rms):+.1f} dB")
         if self._info_card:
             self._info_card.refresh_error()

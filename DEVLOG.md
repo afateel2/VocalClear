@@ -45,40 +45,32 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 
 ### P1 — Bugs (must fix)
 
-- [ ] **Soundboard close→reopen breaks updates**  
-  `soundboard_window.py:closeEvent` stops `_refresh_timer` and nulls `sb._on_sounds_changed/played`.  
-  `tray_app._sb_window` is never cleared → reopening just calls `.show()` on the broken object.  
-  Fix: in `showEvent` restart the timer and re-register callbacks. In `closeEvent` keep timer stop
-  and null callbacks but don't rely on window never being shown again.
+- [x] **Soundboard close→reopen breaks updates** *(fixed session 002)*  
+  Changed `closeEvent` to `event.ignore() + hide()` (same pattern as `main_window.py`).  
+  `showEvent` now restarts the timer if stopped and re-registers with the snapper.
 
-- [ ] **`monitor_enabled` not persisted across restarts**  
-  `soundboard.py:_save_sounds_config()` saves `master_volume`, `monitor_volume`, `overlap` but
-  NOT `_monitor_enabled`. The MONITOR toggle in soundboard window always resets to `True` on launch.  
-  Fix: add `"monitor_enabled": self._monitor_enabled` to the `_global` section, restore in `_load_sounds_config`.
+- [x] **`monitor_enabled` not persisted across restarts** *(fixed session 002)*  
+  Added `"monitor_enabled"` to `_global` in `_save_sounds_config`; restored via the property  
+  setter in `_load_sounds_config` so `_monitor.start()/stop()` fires correctly.
 
-- [ ] **Commit the PySide6 migration**  
-  All 5 modified files + 3 deletions need to be staged and committed.
+- [x] **Commit the PySide6 migration** *(done session 001)*
 
 ### P2 — Papercuts (important, non-critical)
 
-- [ ] **Soundboard window: close button should hide, not destroy**  
-  Currently `closeEvent` accepts → Qt hides the window. But the timer is stopped and callbacks nulled,
-  meaning reopening gives a broken window. Simplest fix: override `closeEvent` to call `hide()` instead,
-  which keeps timer running, callbacks registered, and state intact.  
-  (Linked to the P1 bug above — fixing one fixes both.)
+- [x] **Soundboard window: close button hides, not destroys** *(fixed session 002, merged with P1)*
 
 - [ ] **Settings `_apply_and_restart` baseline reset bug**  
   Lines 784–786 unconditionally reset `_orig_startup/_orig_strength/_orig_gain` baselines even on a
   no-op save. This means the dirty indicator (APPLY button color) clears for unchanged settings when
   something else triggers an apply. Cosmetic but confusing.
 
-- [ ] **xrun count indicator**  
-  `AudioEngine.xrun_count` is tracked but never shown to the user. A brief amber flash in the status bar
-  or main window bottom when new xruns are detected would help diagnose performance issues.
+- [x] **xrun count indicator** *(done session 002)*  
+  `_tick` now compares `engine.xrun_count` against a stored baseline; new xruns amber the dB  
+  readout label and append "⚠ xrun" for 2 seconds, then revert automatically.
 
-- [ ] **Main window: paused state should dim VU meter**  
-  When noise suppression is paused (`_status_chip` shows "PAUSED"), the VU meter still animates.
-  Dimming the colors to grey/dark-green when paused would make the state more visible at a glance.
+- [x] **Main window: paused state dims VU meter** *(done session 002)*  
+  Added `_VUMeter.set_paused(bool)`; when paused all filled segments render in their XLO/dim  
+  variants and peak-hold indicators are suppressed. Called each tick and on every status update.
 
 ### P3 — Features (nice-to-have)
 
@@ -107,14 +99,14 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   Record 2 seconds through the selected input device and play back through monitor so the user can
   verify the mic is working without leaving the app.
 
-- [ ] **Log rotation**  
-  `vocalclear.log` grows forever. At startup, if the file exceeds 500 KB trim it to the last 200 lines.
-  This keeps the file readable without manual cleanup and prevents disk bloat on long-running installs.
+- [x] **Log rotation** *(done session 002)*  
+  `_rotate_log()` in `main.py` trims log to last 200 lines when file exceeds 500 KB.  
+  Runs once per startup, before the new "starting" entry is written.
 
-- [ ] **Crash detection on next launch**  
-  If the previous session has no "exited cleanly" line (i.e., the last line is "VocalClear starting"),
-  show a one-time tray notification: "Last session ended unexpectedly — see log for details."
-  Implemented in `main.py` by reading the tail of the log before writing the new start entry.
+- [x] **Crash detection on next launch** *(done session 002)*  
+  `_check_previous_crash()` scans the log tail: if the last "VocalClear starting" line has no  
+  following "exited cleanly", `TrayApp` receives `prev_crashed=True` and shows a warning  
+  notification 2 s after startup (only when no engine error is also firing).
 
 - [ ] **Startup health-check dialog**  
   On first launch (or when VB-CABLE is missing), show a guided one-time setup notice:
@@ -170,6 +162,38 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 ---
 
 ## Session Log
+
+---
+
+### Session 002 — 2026-06-04 (autonomous loop tick 1)
+
+**Goal:** Fix all P1 bugs + high-value P2 items from backlog.
+
+**Done:**
+- Fixed soundboard close→reopen bug: `closeEvent` now calls `hide()` + `event.ignore()`;  
+  `showEvent` restarts the timer and re-registers with the snapper on every show.
+- Fixed `monitor_enabled` not persisting: added to `_global` in `_save_sounds_config`,  
+  restored via property setter in `_load_sounds_config`.
+- VU meter dims when paused: `_VUMeter.set_paused(bool)` swaps all lit segments to their  
+  XLO/dim variants and suppresses peak-hold markers.
+- xrun indicator: dB readout label turns amber and shows "⚠ xrun" for 2 s when  
+  `engine.xrun_count` increases.
+- Log rotation: `_rotate_log()` trims log to 200 lines if > 500 KB, runs at startup.
+- Crash detection: `_check_previous_crash()` detects missing "exited cleanly" in the  
+  previous session's log tail; shows a tray warning on next launch.
+
+**Problems:**
+- None — all changes were straightforward edits.
+
+**Research / Key Facts:**
+- `QTimer.isActive()` must be checked before restarting in `showEvent`; starting an already-active  
+  timer resets its interval but is harmless.
+- The `monitor_enabled` property setter calls `_monitor.start()/stop()` — must use the setter,  
+  not direct `_monitor_enabled` assignment, to keep the `_MonitorMixer` in sync.
+- `QLabel.setStyleSheet()` called each tick is fine (Qt skips repaint if style unchanged).
+
+**Next session should do:** Settings `_apply_and_restart` baseline fix, startup health-check  
+dialog, audio clipping warning, actual stream latency in main window.
 
 ---
 

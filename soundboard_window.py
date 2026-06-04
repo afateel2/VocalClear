@@ -817,14 +817,17 @@ class SoundBoardWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         if self._snapper:
+            QTimer.singleShot(50, lambda: self._snapper.register(
+                "soundboard", self, snap_side="left-only"))
             self._snapper.position_left_of("main", self)
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start(TICK_MS)
         self._refresh_buttons()
         event.accept()
 
     def closeEvent(self, event) -> None:
-        self._refresh_timer.stop()
+        """X button hides the window; keeps timer + callbacks alive for reopen."""
+        event.ignore()
+        self.hide()
         if self._snapper:
             self._snapper.unregister("soundboard")
-        self.sb._on_sounds_changed = None
-        self.sb._on_play_changed   = None
-        event.accept()

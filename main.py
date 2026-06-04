@@ -35,6 +35,39 @@ def _log(msg: str) -> None:
         pass
 
 
+def _rotate_log() -> None:
+    """Trim the log to the last 200 lines if it exceeds 500 KB."""
+    try:
+        if not _LOG.exists() or _LOG.stat().st_size < 500_000:
+            return
+        lines = _LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+        _LOG.write_text("\n".join(lines[-200:]) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _check_previous_crash() -> bool:
+    """
+    Return True if the previous session did not log a clean exit.
+    Looks for the last 'VocalClear starting' line and checks whether a
+    corresponding 'exited cleanly' follows it.
+    """
+    try:
+        if not _LOG.exists():
+            return False
+        lines = _LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+        last_start = -1
+        for i, line in enumerate(lines):
+            if "VocalClear starting" in line:
+                last_start = i
+        if last_start == -1:
+            return False
+        tail = lines[last_start:]
+        return not any("exited cleanly" in l for l in tail)
+    except Exception:
+        return False
+
+
 def _ensure_single_instance() -> bool:
     """
     Use a named Windows mutex to prevent multiple instances.
@@ -83,6 +116,8 @@ def _set_process_identity() -> None:
 
 def main() -> None:
     _set_process_identity()
+    _rotate_log()
+    prev_crashed = _check_previous_crash()
     _log("VocalClear starting")
     try:
         if not _ensure_single_instance():
@@ -101,7 +136,7 @@ def main() -> None:
 
         # Lazy import to keep startup fast
         from tray_app import TrayApp
-        app = TrayApp()
+        app = TrayApp(prev_crashed=prev_crashed)
         app.run()
         _log("VocalClear exited cleanly")
 
