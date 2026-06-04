@@ -61,6 +61,7 @@ class TrayApp:
         self._active:       bool          = self.config["enabled"]
         self._error_msg:    Optional[str] = None
         self._prev_crashed: bool          = prev_crashed
+        self._vbc_missing:  bool          = False
 
         # Check VB-CABLE on startup
         self._vbc_index = find_vbcable_device()
@@ -111,9 +112,11 @@ class TrayApp:
         # Show main window on launch
         self._main_window.show()
 
-        # Notify if engine failed or previous session crashed
+        # Notify if engine failed, VB-CABLE missing, or previous session crashed
         if self._error_msg:
             QTimer.singleShot(1000, self._notify_engine_error)
+        elif self._vbc_missing:
+            QTimer.singleShot(1500, self._notify_no_vbcable)
         elif self._prev_crashed:
             QTimer.singleShot(2000, self._notify_prev_crash)
 
@@ -132,6 +135,9 @@ class TrayApp:
             self.engine.start()
             _log(f"Engine started  backend={self.noise_filter.backend}"
                  f"  output={self.engine.output_device_name!r}")
+            if self.engine.output_device_name == "System default":
+                self._vbc_missing = True
+                _log("VB-CABLE not found — output falling back to system default")
             if not self.noise_filter.is_calibrated:
                 self.engine.start_calibration(duration_s=2.0, done_cb=lambda: None)
         except Exception as e:
@@ -200,6 +206,19 @@ class TrayApp:
                 "Open Settings → Apply & Restart Audio to retry.",
                 QSystemTrayIcon.MessageIcon.Critical,
                 5000,
+            )
+
+    def _notify_no_vbcable(self) -> None:
+        if self._tray:
+            _log("Tray notification shown: VB-CABLE not found")
+            self._tray.showMessage(
+                "VocalClear — VB-CABLE Not Found",
+                "Virtual audio cable not detected.\n"
+                "Noise suppression is active but your cleaned audio is NOT\n"
+                "reaching Discord or Zoom.\n\n"
+                "Install VB-CABLE from vb-audio.com, then restart VocalClear.",
+                QSystemTrayIcon.MessageIcon.Warning,
+                7000,
             )
 
     def _notify_prev_crash(self) -> None:

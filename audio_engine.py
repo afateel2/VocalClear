@@ -91,6 +91,8 @@ class AudioEngine:
         self.active_input_device               = None
         self.input_rms:          float         = 0.0
         self.output_rms:         float         = 0.0
+        self.input_latency_ms:   float         = 0.0
+        self.output_latency_ms:  float         = 0.0
 
         # SoundBoard (optional — attach after construction)
         self._soundboard: Optional[SoundBoard] = None
@@ -181,9 +183,17 @@ class AudioEngine:
             **({"extra_settings": extra_settings} if extra_settings else {}),
         )
         self._stream.start()
+        try:
+            lat = self._stream.latency
+            self.input_latency_ms  = round(lat[0] * 1000, 1)
+            self.output_latency_ms = round(lat[1] * 1000, 1)
+        except Exception:
+            pass
 
     def stop(self) -> None:
         self._running = False
+        self.input_latency_ms  = 0.0
+        self.output_latency_ms = 0.0
         if self._stream is not None:
             try:
                 self._stream.stop()

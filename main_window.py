@@ -481,6 +481,18 @@ class _InfoCard(QWidget):
         r2.addStretch()
         lo.addLayout(r2)
 
+        # Latency row
+        r3 = QHBoxLayout(); r3.setSpacing(6)
+        lbl_lat_key = QLabel("LATENCY")
+        lbl_lat_key.setFont(FONT_MONO_S)
+        lbl_lat_key.setStyleSheet("color: #3a6642; letter-spacing: 1px;")
+        self._lat_lbl = QLabel("measuring…")
+        self._lat_lbl.setFont(FONT_MONO_L)
+        self._lat_lbl.setStyleSheet("color: #6aaa7a;")
+        for w in (lbl_lat_key, self._lat_lbl): r3.addWidget(w)
+        r3.addStretch()
+        lo.addLayout(r3)
+
         # Error row
         self._err_lbl = QLabel("")
         self._err_lbl.setFont(FONT_MONO_S)
@@ -496,6 +508,14 @@ class _InfoCard(QWidget):
 
     def refresh_output(self) -> None:
         self._out_lbl.setText(self._engine.output_device_name or "detecting…")
+
+    def refresh_latency(self) -> None:
+        in_ms  = self._engine.input_latency_ms
+        out_ms = self._engine.output_latency_ms
+        if in_ms or out_ms:
+            self._lat_lbl.setText(f"{in_ms:.1f} ms in / {out_ms:.1f} ms out")
+        else:
+            self._lat_lbl.setText("measuring…")
 
     def refresh_error(self) -> None:
         err = self._engine.last_error
@@ -590,8 +610,11 @@ class MainWindow(QMainWindow):
         self._status_chip:Optional[_StatusChip]    = None
         self._toggle_btn: Optional[_IconButton]    = None
         self._db_lbl:     Optional[QLabel]         = None
+        self._clip_lbl:   Optional[QLabel]         = None
         self._last_xrun:  int                      = 0
         self._xrun_flash: int                      = 0   # ticks remaining for amber flash
+        self._clip_count: int                      = 0   # consecutive high-RMS ticks
+        self._clip_flash: int                      = 0   # ticks remaining for clip warning
 
         self._build_ui()
         _apply_dark_titlebar(int(self.winId()))
@@ -607,6 +630,7 @@ class MainWindow(QMainWindow):
             self._snapper.set_anchor("main")
             QTimer.singleShot(50, lambda: self._snapper.register("main", self))
         self.show()
+        QTimer.singleShot(2000, self._do_refresh_latency)
         QApplication.instance().exec()
 
     def show_window(self) -> None:
@@ -623,6 +647,7 @@ class MainWindow(QMainWindow):
 
     def refresh_output_device(self) -> None:
         QTimer.singleShot(0, self._do_refresh_output)
+        QTimer.singleShot(500, self._do_refresh_latency)
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
@@ -689,10 +714,15 @@ class MainWindow(QMainWindow):
 
         db_row = QHBoxLayout()
         db_row.setContentsMargins(2, 0, 2, 0)
+        self._clip_lbl = QLabel("▲ CLIP")
+        self._clip_lbl.setFont(FONT_MONO_S)
+        self._clip_lbl.setStyleSheet("color: #ff1744; letter-spacing: 1px;")
+        self._clip_lbl.hide()
+        db_row.addWidget(self._clip_lbl)
+        db_row.addStretch()
         self._db_lbl = QLabel("")
         self._db_lbl.setFont(FONT_MONO_S)
         self._db_lbl.setStyleSheet("color: #3a6642;")
-        db_row.addStretch()
         db_row.addWidget(self._db_lbl)
         db_row.addStretch()
         vu_lo.addLayout(db_row)
@@ -806,6 +836,10 @@ class MainWindow(QMainWindow):
         if self._info_card:
             self._info_card.refresh_output()
 
+    def _do_refresh_latency(self) -> None:
+        if self._info_card:
+            self._info_card.refresh_latency()
+
     def _sounds_playing(self) -> bool:
         sb = getattr(self, "soundboard", None)
         if sb is None:
@@ -860,6 +894,20 @@ class MainWindow(QMainWindow):
             self._vu_meter.update_levels(in_rms, out_rms)
         if self._history:
             self._history.push(in_rms, out_rms)
+        # Clip detection: 3 consecutive ticks above 0.92 RMS triggers a 2 s warning
+        if out_rms > 0.92:
+            self._clip_count += 1
+            if self._clip_count >= 3:
+                self._clip_flash = 40
+        else:
+            self._clip_count = 0
+        if self._clip_lbl:
+            if self._clip_flash > 0:
+                self._clip_flash -= 1
+                self._clip_lbl.show()
+            else:
+                self._clip_lbl.hide()
+
         if self._db_lbl:
             cur_xrun = getattr(self.engine, "xrun_count", 0)
             if cur_xrun > self._last_xrun:

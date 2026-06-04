@@ -108,20 +108,18 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   following "exited cleanly", `TrayApp` receives `prev_crashed=True` and shows a warning  
   notification 2 s after startup (only when no engine error is also firing).
 
-- [ ] **Startup health-check dialog**  
-  On first launch (or when VB-CABLE is missing), show a guided one-time setup notice:
-  "VB-CABLE not found — noise suppression is inactive. Install from vb-audio.com then restart."
-  Currently the warning only appears buried in Settings. A modal on first bad start is much clearer.
+- [x] **Startup VB-CABLE missing notification** *(done session 003)*  
+  After `engine.start()`, if `output_device_name == "System default"`, `_vbc_missing = True` is set  
+  and a 7 s tray warning fires explaining that Discord/Zoom won't receive cleaned audio.
 
-- [ ] **Audio clipping warning in VU meter**  
-  If `output_rms` stays above 0.92 for 3+ consecutive ticks, flash the OUT channel red and show
-  "CLIP" in the dB readout. Clipping before VB-CABLE means Discord hears distortion.
-  Clear automatically after 2 seconds of non-clipping output.
+- [x] **Audio clipping warning** *(done session 003)*  
+  `_tick` tracks consecutive ticks where `out_rms > 0.92`; after 3 consecutive clips a "▲ CLIP"  
+  label appears in red to the left of the dB readout for 2 seconds.
 
-- [ ] **Show actual stream latency in main window**  
-  `sounddevice.Stream.latency` returns the measured `(input_latency, output_latency)` tuple after
-  the stream opens. Expose this on `AudioEngine` and display it in the main window info card
-  (e.g., "LATENCY  4.2 ms in / 8.1 ms out") replacing the estimated value shown in settings.
+- [x] **Show actual stream latency in info card** *(done session 003)*  
+  `AudioEngine` now exposes `input_latency_ms` / `output_latency_ms` read from  
+  `stream.latency` after start (reset to 0.0 on stop). `_InfoCard` shows a LATENCY row;  
+  updated 2 s after launch and after every Settings-triggered restart.
 
 - [ ] **Mid-session device-loss watchdog**  
   Currently if VB-CABLE resets or the mic is unplugged while the stream is running, the audio
@@ -162,6 +160,35 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 ---
 
 ## Session Log
+
+---
+
+### Session 003 — 2026-06-04 (autonomous loop tick 2)
+
+**Goal:** VB-CABLE missing notification, clip warning, stream latency display.
+
+**Done:**
+- VB-CABLE missing notification: `_start_engine` detects `output_device_name == "System default"`  
+  and sets `_vbc_missing`; a 7 s tray warning fires explaining Discord/Zoom won't get cleaned audio.  
+  Priority below engine error, above prev-crash notification.
+- Clip warning: `▲ CLIP` label (hidden by default) appears to the left of the dB readout for 2 s  
+  whenever 3 consecutive ticks of `out_rms > 0.92` are detected.
+- Stream latency: `AudioEngine.input_latency_ms / output_latency_ms` read from `stream.latency`  
+  after start; displayed in a new LATENCY row in `_InfoCard`; refreshed 2 s post-launch and after  
+  every Settings restart; reset to 0.0 on engine stop.
+
+**Problems:**
+- `sounddevice.Stream.latency` returns a plain float on some builds (not always a tuple). Wrapped  
+  the read in try/except; if it fails the row shows "measuring…" indefinitely — acceptable fallback.
+
+**Research / Key Facts:**
+- `sounddevice.Stream.latency` is documented to return a `(input, output)` namedtuple in seconds,  
+  but some builds return a scalar (the output latency only). The try/except guard handles this.
+- VB-CABLE "Input" device shows up as output-only (`max_input_channels == 0`) in sounddevice;  
+  the detection in `find_vbcable_device` checks this correctly.
+
+**Next session should do:** Mid-session device-loss watchdog, PTT live indicator in main window,  
+soundboard search/filter bar, tray tooltip live dB.
 
 ---
 
