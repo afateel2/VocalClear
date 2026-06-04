@@ -1,892 +1,830 @@
 """
-SoundBoard window — oscilloscope aesthetic, fixed 480×308 px.
+VocalClear SoundBoard window — PySide6, oscilloscope aesthetic.
 
-Snaps to VocalClear main window (Winamp-style) when dragged close.
-
-Layout:
-  ┌─ 2px GREEN ──────────────────────────────────────────────────────┐
-  │  SOUNDBOARD  ·  VOCALCLEAR                  [+ ADD]  [■ STOP ALL]│
-  ├─ 1px dim ────────────────────────────────────────────────────────┤
-  │  ○ OVERLAP   ● MONITOR   ──────────── ■■■□  80%   SFX LEVEL     │
-  ├─ 1px dim ────────────────────────────────────────────────────────┤
-  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐   ← 4-col grid    │
-  │  │ kick   │ │airhorn │ │  bruh  │ │  clap  │      scrollable    │
-  │  │  F1    │ │        │ │        │ │        │                    │
-  │  └────────┘ └────────┘ └────────┘ └────────┘                    │
-  ├─ 1px dim ────────────────────────────────────────────────────────┤
-  │  4 sounds loaded  ·  2 playing                                   │
-  └──────────────────────────────────────────────────────────────────┘
+Fixed 480×590 px to match main/settings for horizontal snapping.
 """
 
 from __future__ import annotations
 
 import threading
-import tkinter as tk
-from tkinter import filedialog, messagebox
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from PySide6.QtCore import Qt, QTimer, QRect, QSize, QPoint
+from PySide6.QtGui import (
+    QColor, QPainter, QPen, QBrush, QFont, QFontMetrics,
+    QPalette, QIcon, QLinearGradient,
+)
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QFrame, QScrollArea, QSizePolicy, QApplication, QFileDialog,
+    QMessageBox, QGridLayout, QInputDialog, QLineEdit,
+)
 
 if TYPE_CHECKING:
-    from soundboard import SoundBoard
+    from soundboard import SoundBoard, Sound
     from window_snapper import SnapManager
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-BG_ROOT  = "#030603"
-BG       = "#060d06"
-BG_CARD  = "#0b160b"
-BG_INPUT = "#0f1f0f"
-GRID_COL = "#0d1f0d"
+C_BG_ROOT  = QColor("#030603")
+C_BG       = QColor("#060d06")
+C_BG_CARD  = QColor("#0b160b")
+C_BG_INPUT = QColor("#0f1f0f")
+C_GRID     = QColor("#0d1f0d")
+C_GREEN    = QColor("#00e676")
+C_GREEN_DIM= QColor("#007a40")
+C_GREEN_LO = QColor("#004d28")
+C_GREEN_XLO= QColor("#001f10")
+C_AMBER    = QColor("#ffb300")
+C_RED      = QColor("#ff1744")
+C_FG       = QColor("#c8ffd4")
+C_FG_DIM   = QColor("#3a6642")
+C_FG_MID   = QColor("#6aaa7a")
 
-GREEN     = "#00e676"
-GREEN_DIM = "#007a40"
-GREEN_LO  = "#004d28"
-GREEN_ACT = "#00ff87"
-AMBER     = "#ffb300"
-RED       = "#ff1744"
-SILVER    = "#8899aa"
+FONT_MONO    = QFont("Consolas", 9)
+FONT_MONO_XL = QFont("Consolas", 13); FONT_MONO_XL.setBold(True)
+FONT_MONO_H  = QFont("Consolas", 11); FONT_MONO_H.setBold(True)
+FONT_MONO_L  = QFont("Consolas", 8)
+FONT_MONO_S  = QFont("Consolas", 7)
 
-FG        = "#c8ffd4"
-FG_DIM    = "#3a6642"
-FG_MID    = "#6aaa7a"
-
-FONT_MONO   = ("Consolas", 9)
-FONT_MONO_M = ("Consolas", 10)
-FONT_MONO_H = ("Consolas", 11, "bold")
-FONT_MONO_L = ("Consolas", 8)
-FONT_MONO_XL = ("Consolas", 13, "bold")
-
-# Window dimensions — fixed to match main window width for snapping
 W        = 480
+H        = 590
 BTN_COLS = 4
-BTN_W    = 104   # (480 - 32 padding - 3×6 gaps) / 4 ≈ 104
-BTN_H    = 80
-GRID_H   = 296   # canvas height for scrollable button area
-H        = 590   # total window height — matches main + settings windows
+BTN_W    = 104
+BTN_H    = 90
 TICK_MS  = 100
 
-_SB_W    = 8     # custom scrollbar width in pixels
 
-
-class _CustomScrollbar(tk.Canvas):
-    """
-    Thin vertical scrollbar matching the app aesthetic.
-    Drop-in replacement for ttk.Scrollbar — exposes .set() and calls
-    the scroll command exactly like the standard scrollbar widget.
-    """
-
-    def __init__(self, parent, command, **kw):
-        super().__init__(
-            parent,
-            width=_SB_W,
-            bg=BG_INPUT,
-            highlightthickness=0,
-            cursor="arrow",
-            **kw,
-        )
-        self._command     = command
-        self._thumb_start = 0.0
-        self._thumb_end   = 1.0
-        self._dragging    = False
-        self._drag_y      = 0
-        self._drag_start  = 0.0
-        self._hover       = False
-
-        self.bind("<Configure>",       self._redraw)
-        self.bind("<Button-1>",        self._on_click)
-        self.bind("<B1-Motion>",       self._on_drag)
-        self.bind("<ButtonRelease-1>", self._on_release)
-        self.bind("<Enter>",           lambda e: self._set_hover(True))
-        self.bind("<Leave>",           lambda e: self._set_hover(False))
-
-    # Called by the canvas yscrollcommand
-    def set(self, first: str, last: str) -> None:
-        self._thumb_start = float(first)
-        self._thumb_end   = float(last)
-        self._redraw()
-
-    def _set_hover(self, on: bool) -> None:
-        self._hover = on
-        self._redraw()
-
-    def _redraw(self, _=None) -> None:
-        self.delete("all")
-        h = self.winfo_height() or 100
-        w = self.winfo_width()  or _SB_W
-        ty0 = int(h * self._thumb_start)
-        ty1 = int(h * self._thumb_end)
-        ty1 = max(ty1, ty0 + 14)          # minimum thumb height
-        col = GREEN if self._hover else GREEN_DIM
-        self.create_rectangle(1, ty0, w - 1, ty1, fill=col, outline="")
-
-    def _on_click(self, event) -> None:
-        h = self.winfo_height()
-        if not h:
-            return
-        frac = event.y / h
-        if frac < self._thumb_start:
-            self._command("scroll", -1, "pages")
-        elif frac > self._thumb_end:
-            self._command("scroll", 1, "pages")
-        else:
-            self._dragging   = True
-            self._drag_y     = event.y
-            self._drag_start = self._thumb_start
-
-    def _on_drag(self, event) -> None:
-        if not self._dragging:
-            return
-        h = self.winfo_height()
-        if not h:
-            return
-        delta   = (event.y - self._drag_y) / h
-        span    = self._thumb_end - self._thumb_start
-        new_pos = max(0.0, min(1.0 - span, self._drag_start + delta))
-        self._command("moveto", new_pos)
-
-    def _on_release(self, _) -> None:
-        self._dragging = False
-
-
-def _apply_dark_titlebar(root: tk.Tk) -> None:
-    """Apply Windows dark mode to the native title bar (Windows 10 19041+)."""
+def _apply_dark_titlebar(hwnd: int) -> None:
+    import ctypes
     try:
-        import ctypes
-        from window_snapper import _frame_hwnd
-        hwnd = _frame_hwnd(root)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 20,
-            ctypes.byref(ctypes.c_int(1)),
-            ctypes.sizeof(ctypes.c_int),
-        )
+            hwnd, 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int))
     except Exception:
         pass
 
 
-class SoundBoardWindow:
-    def __init__(self, soundboard: "SoundBoard", snapper: "SnapManager" = None):
-        self.sb       = soundboard
-        self._snapper = snapper
-        self._root:   Optional[tk.Tk] = None
-        self._btn_frames: dict[str, tk.Frame] = {}
-        self._refresh_pending = threading.Event()  # thread-safe refresh flag
-        self._running = False
+def _hdivider(color: QColor = C_GREEN_LO) -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFrameShadow(QFrame.Shadow.Plain)
+    line.setStyleSheet(f"border: none; background: {color.name()}; max-height: 1px;")
+    return line
 
-        self._snap_bar_r = None
-        self._header_status_lbl = None
+
+# ── Toggle button ─────────────────────────────────────────────────────────────
+
+class _ToggleBtn(QLabel):
+    def __init__(self, text: str, state: bool, parent=None):
+        super().__init__(parent)
+        self._text  = text
+        self._state = state
+        self._cb    = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFont(FONT_MONO_L)
+        self._refresh()
+
+    def set_callback(self, cb) -> None: self._cb = cb
+
+    @property
+    def state(self) -> bool: return self._state
+
+    @state.setter
+    def state(self, v: bool) -> None:
+        self._state = v; self._refresh()
+
+    def _refresh(self) -> None:
+        dot = "●" if self._state else "○"
+        self.setText(f" {dot} {self._text} ")
+        if self._state:
+            self.setStyleSheet(
+                "background: #00e676; color: #020502; padding: 3px 8px; "
+                "font-family: Consolas; font-size: 8pt;")
+        else:
+            self.setStyleSheet(
+                "background: #081208; color: #2a4a2e; padding: 3px 8px; "
+                "border: 1px solid #003319; font-family: Consolas; font-size: 8pt;")
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._cb:
+            self._cb()
+
+
+# ── Small header button ───────────────────────────────────────────────────────
+
+class _HeaderBtn(QWidget):
+    """Bordered action button for the soundboard header."""
+
+    def __init__(self, text: str, callback,
+                 color: QColor = C_GREEN_DIM,
+                 hot: QColor = C_GREEN,
+                 text_idle: QColor | None = None,
+                 parent=None):
+        super().__init__(parent)
+        self._text      = text
+        self._callback  = callback
+        self._base      = color
+        self._hot       = hot
+        self._idle_text = text_idle or color
+        self._hovered   = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def set_text(self, t: str) -> None: self._text = t; self.update()
+
+    def sizeHint(self) -> QSize:
+        fm = QFontMetrics(FONT_MONO_L)
+        return QSize(fm.horizontalAdvance(self._text) + 18, fm.height() + 10)
+
+    def paintEvent(self, _):
+        p   = QPainter(self)
+        r   = self.rect()
+        col = self._hot if self._hovered else self._base
+        if self._hovered:
+            p.fillRect(r, col)
+            p.setPen(QPen(col.lighter(160), 1))
+            p.drawRect(r.adjusted(0, 0, -1, -1))
+            tc = C_BG_ROOT
+        else:
+            p.fillRect(r, QColor(8, 18, 8))
+            p.setPen(QPen(col, 1))
+            p.drawRect(r.adjusted(0, 0, -1, -1))
+            tc = self._idle_text
+        p.setFont(FONT_MONO_L)
+        p.setPen(tc)
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self._text)
+
+    def enterEvent(self, _): self._hovered = True;  self.update()
+    def leaveEvent(self, _): self._hovered = False; self.update()
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton: self._callback()
+
+
+# Alias for the volume popup (same widget, slightly larger text)
+class _SmallBtn(_HeaderBtn):
+    def sizeHint(self) -> QSize:
+        fm = QFontMetrics(FONT_MONO)
+        return QSize(fm.horizontalAdvance(self._text) + 22, fm.height() + 12)
+
+    def paintEvent(self, _):
+        p   = QPainter(self)
+        r   = self.rect()
+        col = self._hot if self._hovered else self._base
+        if self._hovered:
+            p.fillRect(r, col)
+            p.setPen(QPen(col.lighter(160), 1))
+            p.drawRect(r.adjusted(0, 0, -1, -1))
+            tc = C_BG_ROOT
+        else:
+            p.fillRect(r, QColor(8, 18, 8))
+            p.setPen(QPen(col, 1))
+            p.drawRect(r.adjusted(0, 0, -1, -1))
+            tc = self._idle_text
+        p.setFont(FONT_MONO)
+        p.setPen(tc)
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self._text)
+
+
+# ── SFX level slider ──────────────────────────────────────────────────────────
+
+class _SFXBar(QWidget):
+    def __init__(self, value: float = 0.8, parent=None):
+        super().__init__(parent)
+        self._value     = value
+        self._on_change = None
+        self.setFixedHeight(20)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    @property
+    def value(self) -> float: return self._value
+
+    @value.setter
+    def value(self, v: float) -> None: self._value = v; self.update()
+
+    def set_on_change(self, cb) -> None: self._on_change = cb
+
+    def paintEvent(self, _):
+        p  = QPainter(self)
+        cw = self.width()
+        ch = self.height()
+
+        # Background
+        p.fillRect(self.rect(), QColor("#081208"))
+        p.setPen(QPen(QColor("#0d1f0d"), 1))
+        for x in range(0, cw, 12):
+            p.drawLine(x, 0, x, ch)
+
+        # Filled portion
+        filled = max(1, int(cw * self._value))
+        # Gradient fill
+        grad = QLinearGradient(0, 0, filled, 0)
+        grad.setColorAt(0.0, QColor("#003d1f"))
+        grad.setColorAt(0.7, QColor("#006030"))
+        grad.setColorAt(1.0, QColor("#00e676"))
+        p.fillRect(QRect(0, 3, filled, ch - 6), QBrush(grad))
+
+        # Bright tip
+        if filled > 4:
+            p.fillRect(QRect(filled - 3, 3, 3, ch - 6), QColor("#00ff9a"))
+
+        # Cursor line
+        p.setPen(QPen(C_GREEN, 1))
+        p.drawLine(filled, 1, filled, ch - 2)
+
+        # Border
+        p.setPen(QPen(C_GREEN_LO, 1))
+        p.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+    def _set_from_x(self, x: int) -> None:
+        cw = self.width()
+        if not cw: return
+        v = max(0.0, min(1.0, x / cw))
+        self._value = v; self.update()
+        if self._on_change: self._on_change(v)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton: self._set_from_x(int(e.position().x()))
+
+    def mouseMoveEvent(self, e):
+        if e.buttons() & Qt.MouseButton.LeftButton: self._set_from_x(int(e.position().x()))
+
+
+# ── Sound button ──────────────────────────────────────────────────────────────
+
+class _SoundButton(QWidget):
+    """
+    Single sound tile in the grid.
+
+    Idle:    dark background · dot grid · dim border
+    Hover:   lighter background · brighter border
+    Playing: green tinted background · scan lines · bright border ·
+             filled triangle indicator in top-right corner
+    """
+
+    def __init__(self, name: str, sound, on_play, on_context, parent=None):
+        super().__init__(parent)
+        self._name       = name
+        self._sound      = sound
+        self._on_play    = on_play
+        self._on_context = on_context
+        self._playing    = False
+        self._hovered    = False
+        self.setFixedSize(BTN_W, BTN_H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_playing(self, v: bool) -> None:
+        if v != self._playing:
+            self._playing = v; self.update()
+
+    def paintEvent(self, _):
+        p  = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        BW = self.width()
+        BH = self.height()
+
+        # ── Background ────────────────────────────────────────────────────────
+        if self._playing:
+            bg = QColor("#0c2010")
+        elif self._hovered:
+            bg = QColor("#101f10")
+        else:
+            bg = C_BG_CARD
+        p.fillRect(self.rect(), bg)
+
+        # Dot grid texture
+        dot_col = QColor("#162a16") if self._playing else QColor("#0e200e")
+        p.setPen(QPen(dot_col, 1))
+        for yy in range(5, BH - 2, 7):
+            for xx in range(5, BW - 2, 7):
+                p.drawPoint(xx, yy)
+
+        # Scan lines when playing
+        if self._playing:
+            scan = QColor(0, 60, 20, 35)
+            for yy in range(0, BH, 5):
+                p.fillRect(QRect(0, yy, BW, 1), scan)
+
+        # ── Border ───────────────────────────────────────────────────────────
+        if self._playing:
+            p.setPen(QPen(C_GREEN, 2))
+            p.drawRect(self.rect().adjusted(1, 1, -2, -2))
+            # Inner bright line on top edge
+            p.setPen(QPen(QColor("#00ff9a"), 1))
+            p.drawLine(2, 1, BW - 3, 1)
+        elif self._hovered:
+            p.setPen(QPen(C_GREEN_DIM, 1))
+            p.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        else:
+            p.setPen(QPen(C_GREEN_XLO, 1))
+            p.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+        # ── Playing triangle indicator (top-right corner) ─────────────────────
+        if self._playing:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(C_GREEN))
+            tri = [QPoint(BW - 3, 3), QPoint(BW - 3, 14), QPoint(BW - 14, 3)]
+            p.drawPolygon(tri)
+
+        # ── Name ─────────────────────────────────────────────────────────────
+        n = len(self._name)
+        if n <= 10:
+            font = FONT_MONO
+        elif n <= 18:
+            font = FONT_MONO_L
+        else:
+            font = FONT_MONO_S
+        text_col = QColor("#00ff9a") if self._playing else C_FG
+        p.setFont(font)
+        p.setPen(text_col)
+        # Reserve top-right for indicator when playing
+        right_inset = 14 if self._playing else 4
+        text_r = QRect(4, 4, BW - 4 - right_inset, BH - 14)
+        p.drawText(text_r,
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+                   | Qt.TextFlag.TextWordWrap,
+                   self._name)
+
+        # ── Volume bar (full-width, 3 px at absolute bottom) ─────────────────
+        vol    = self._sound.volume
+        bar_y  = BH - 5
+        bar_h  = 3
+        filled = max(1, int(BW * vol))
+        p.fillRect(QRect(0, bar_y, BW, bar_h), QColor("#001a0e"))
+        bar_col = QColor("#00c863") if self._playing else QColor("#005030")
+        p.fillRect(QRect(0, bar_y, filled, bar_h), bar_col)
+        if filled > 3:
+            p.fillRect(QRect(filled - 3, bar_y, 3, bar_h), bar_col.lighter(170))
+
+    def enterEvent(self, _): self._hovered = True;  self.update()
+    def leaveEvent(self, _): self._hovered = False; self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._on_play(self._name)
+        elif e.button() == Qt.MouseButton.RightButton:
+            self._on_context(self._name, e.globalPosition().toPoint())
+
+
+# ── Volume popup ──────────────────────────────────────────────────────────────
+
+class _VolumePopup(QMainWindow):
+    def __init__(self, name: str, init_vol: float, on_save, parent=None):
+        super().__init__(parent)
+        self._on_save = on_save
+        self._vol     = [init_vol]
+
+        self.setWindowTitle("Volume")
+        self.setFixedSize(300, 160)
+        self.setStyleSheet("QMainWindow, QWidget { background: #030603; }")
+        _apply_dark_titlebar(int(self.winId()))
+
+        ico = Path(__file__).parent / "vocalclear.ico"
+        if ico.exists(): self.setWindowIcon(QIcon(str(ico)))
+
+        c = QWidget(); self.setCentralWidget(c)
+        lo = QVBoxLayout(c); lo.setContentsMargins(0, 0, 0, 0); lo.setSpacing(0)
+
+        acc = QWidget(); acc.setFixedHeight(2)
+        acc.setStyleSheet("background: #00e676;"); lo.addWidget(acc)
+
+        hdr = QWidget()
+        hl  = QHBoxLayout(hdr); hl.setContentsMargins(14, 8, 14, 8)
+        t   = QLabel("VOLUME"); t.setFont(FONT_MONO_H); t.setStyleSheet("color: #00e676;")
+        s   = QLabel(f"  {name}"); s.setFont(FONT_MONO_L); s.setStyleSheet("color: #3a6642;")
+        hl.addWidget(t); hl.addWidget(s); hl.addStretch()
+        lo.addWidget(hdr)
+        lo.addWidget(_hdivider(C_GREEN_LO))
+
+        body = QWidget()
+        bl   = QVBoxLayout(body); bl.setContentsMargins(16, 12, 16, 12); bl.setSpacing(10)
+
+        row  = QHBoxLayout()
+        _l   = QLabel("LEVEL"); _l.setFont(FONT_MONO_L); _l.setStyleSheet("color: #3a6642;")
+        row.addWidget(_l); row.addStretch()
+        self._pct = QLabel(f"{int(init_vol * 100):3d}%")
+        self._pct.setFont(FONT_MONO); self._pct.setStyleSheet("color: #00e676;")
+        row.addWidget(self._pct)
+        bl.addLayout(row)
+
+        self._bar = _SFXBar(init_vol)
+
+        def _changed(v):
+            self._vol[0] = v
+            self._pct.setText(f"{int(v * 100):3d}%")
+
+        self._bar.set_on_change(_changed)
+        bl.addWidget(self._bar)
+        lo.addWidget(body)
+
+        lo.addWidget(_hdivider(C_GREEN_LO))
+        bbar = QWidget()
+        bl2  = QHBoxLayout(bbar); bl2.setContentsMargins(14, 8, 14, 8); bl2.addStretch()
+        cancel = _SmallBtn("CANCEL", self.close,
+                           color=QColor("#3a1010"), hot=QColor("#cc0030"),
+                           text_idle=QColor("#8b1a2a"))
+        save   = _SmallBtn("SAVE",   self._save, color=C_GREEN_DIM, hot=C_GREEN)
+        bl2.addWidget(cancel); bl2.addWidget(save)
+        lo.addWidget(bbar)
+
+    def _save(self) -> None:
+        self._on_save(self._vol[0]); self.close()
+
+
+# ── Soundboard window ─────────────────────────────────────────────────────────
+
+class SoundBoardWindow(QMainWindow):
+    def __init__(self, soundboard: "SoundBoard", snapper: "SnapManager" = None):
+        super().__init__()
+        self.sb        = soundboard
+        self._snapper  = snapper
+        self._btns:    dict[str, _SoundButton] = {}
+        self._refresh_pending = threading.Event()
+        self._status_lbl:     Optional[QLabel] = None
+        self._header_status:  Optional[QLabel] = None
+        self._placeholder:    Optional[QLabel] = None
+
+        self.setWindowTitle("SoundBoard  —  VocalClear")
+        self.setFixedSize(W, H)
+        self.setStyleSheet("QMainWindow, QWidget { background: #030603; color: #c8ffd4; }")
+
+        ico = Path(__file__).parent / "vocalclear.ico"
+        if ico.exists(): self.setWindowIcon(QIcon(str(ico)))
+
+        self._build_ui()
+        _apply_dark_titlebar(int(self.winId()))
 
         self.sb._on_sounds_changed = self._schedule_refresh
         self.sb._on_play_changed   = self._schedule_refresh
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Entry point
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def run(self) -> None:
-        self._root = tk.Tk()
-        self._root.withdraw()           # hide until dark mode applied + positioned
-        self._root.title("SoundBoard  —  VocalClear")
-        self._root.geometry(f"{W}x{H}")
-        self._root.resizable(False, False)
-        self._root.configure(bg=BG_ROOT)
-        self._root.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        # Log Tkinter callback exceptions (stderr is hidden under pythonw.exe)
-        import traceback as _tb, datetime as _dt
-        _log_path = Path.home() / ".vocalclear" / "vocalclear.log"
-        def _report_tk_exc(exc, val, tb):
-            try:
-                with open(_log_path, "a", encoding="utf-8") as _f:
-                    _f.write(f"[{_dt.datetime.now():%H:%M:%S}] SB Tk error:\n")
-                    _f.write("".join(_tb.format_exception(exc, val, tb)))
-            except Exception:
-                pass
-        self._root.report_callback_exception = _report_tk_exc
-
-        # Icon — same as main app
-        ico = Path(__file__).parent / "vocalclear.ico"
-        try:
-            if ico.exists():
-                self._root.iconbitmap(str(ico))
-        except Exception:
-            try:
-                self._root.iconbitmap(default="")
-            except Exception:
-                pass
-
-        self._build_ui()
-        self._refresh_buttons()   # starts background hotkey thread if needed
-        self._running = True
-
-        self._root.update_idletasks()
-        _apply_dark_titlebar(self._root)  # synchronous — no flicker
-
-        # Position to the left of main window on first open (horizontal snap)
-        if self._snapper:
-            self._snapper.position_left_of("main", self._root)
-
-        self._root.deiconify()
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._poll_refresh)
+        self._refresh_timer.start(50)
 
         if self._snapper:
-            self._root.after(50, lambda: self._snapper.register("soundboard", self._root, snap_side="left-only"))
-            self._root.after(300, self._tick_snap_bar)
+            QTimer.singleShot(50, lambda: self._snapper.register(
+                "soundboard", self, snap_side="left-only"))
 
-        self._root.after(50, self._poll_refresh)
-        self._root.mainloop()
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # UI construction
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── Build UI ──────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        root = self._root
+        c    = QWidget(); self.setCentralWidget(c)
+        root = QVBoxLayout(c); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
 
-        # ── Top accent line ───────────────────────────────────────────────────
-        tk.Frame(root, bg=GREEN, height=2).pack(fill="x")
+        # Top accent bar
+        acc = QWidget(); acc.setFixedHeight(2)
+        acc.setStyleSheet("background: #00e676;"); root.addWidget(acc)
 
-        # ── Header: title row ─────────────────────────────────────────────────
-        hdr_title = tk.Frame(root, bg=BG_ROOT, padx=16)
-        hdr_title.pack(fill="x", pady=(8, 2))
+        # ── Header ────────────────────────────────────────────────────────────
+        hdr = QWidget()
+        hdr.setAutoFillBackground(True)
+        pal = hdr.palette(); pal.setColor(QPalette.ColorRole.Window, QColor("#040804"))
+        hdr.setPalette(pal)
+        hdr_lo = QVBoxLayout(hdr); hdr_lo.setContentsMargins(0, 0, 0, 0); hdr_lo.setSpacing(0)
 
-        tk.Label(hdr_title, text="SOUNDBOARD", bg=BG_ROOT, fg=GREEN,
-                 font=FONT_MONO_XL).pack(side="left")
-        tk.Label(hdr_title, text="  ·  VOCALCLEAR", bg=BG_ROOT, fg=FG_DIM,
-                 font=FONT_MONO).pack(side="left")
-        self._header_status_lbl = tk.Label(hdr_title, text="", bg=BG_ROOT,
-                                           fg=GREEN, font=FONT_MONO_L)
-        self._header_status_lbl.pack(side="left", padx=(12, 0))
+        # Title row
+        title_row = QHBoxLayout(); title_row.setContentsMargins(16, 10, 16, 4)
+        t_sound = QLabel("SOUND"); t_sound.setFont(FONT_MONO_XL)
+        t_sound.setStyleSheet("color: #00e676;")
+        t_board = QLabel("BOARD"); t_board.setFont(FONT_MONO_XL)
+        t_board.setStyleSheet("color: #c8ffd4;")
+        t_sub = QLabel("  VOCALCLEAR"); t_sub.setFont(FONT_MONO_S)
+        t_sub.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        self._header_status = QLabel("")
+        self._header_status.setFont(FONT_MONO_L)
+        self._header_status.setStyleSheet("color: #00e676;")
+        title_row.addWidget(t_sound); title_row.addWidget(t_board)
+        title_row.addWidget(t_sub);   title_row.addWidget(self._header_status)
+        title_row.addStretch()
+        hdr_lo.addLayout(title_row)
 
-        # ── Header: action buttons row ────────────────────────────────────────
-        hdr_btns = tk.Frame(root, bg=BG_ROOT, padx=16)
-        hdr_btns.pack(fill="x", pady=(0, 8))
-
-        self._btn_widget(hdr_btns, "⬇ IMPORT",   self._do_import, side="left")
-        tk.Frame(hdr_btns, bg=BG_ROOT, width=5).pack(side="left")
-        self._btn_widget(hdr_btns, "⬆ EXPORT",   self._do_export, side="left")
-        tk.Frame(hdr_btns, bg=BG_ROOT, width=5).pack(side="left")
-        self._btn_widget(hdr_btns, "+ ADD",       self._add_sound, side="left")
-        self._btn_widget(hdr_btns, "■ STOP ALL",  self._stop_all,  side="right", color=RED)
-
-        tk.Frame(root, bg=GREEN_LO, height=1).pack(fill="x")
+        # Action buttons row
+        btn_row = QHBoxLayout(); btn_row.setContentsMargins(16, 0, 16, 10); btn_row.setSpacing(6)
+        btn_row.addWidget(_HeaderBtn("▼ IMPORT", self._do_import))
+        btn_row.addWidget(_HeaderBtn("▲ EXPORT", self._do_export))
+        btn_row.addWidget(_HeaderBtn("+ ADD",    self._add_sound))
+        btn_row.addStretch()
+        self._stop_btn = _HeaderBtn(
+            "▪ STOP ALL", self._stop_all,
+            color=QColor("#5a0010"), hot=QColor("#cc0030"),
+            text_idle=QColor("#8b1a2a"))
+        btn_row.addWidget(self._stop_btn)
+        hdr_lo.addLayout(btn_row)
+        root.addWidget(hdr)
+        root.addWidget(_hdivider(C_GREEN_LO))
 
         # ── Controls row ──────────────────────────────────────────────────────
-        ctrl = tk.Frame(root, bg=BG_CARD, padx=16, pady=7)
-        ctrl.pack(fill="x")
+        ctrl = QWidget()
+        ctrl.setAutoFillBackground(True)
+        pal = ctrl.palette(); pal.setColor(QPalette.ColorRole.Window, QColor("#050d05"))
+        ctrl.setPalette(pal)
+        ctrl_lo = QHBoxLayout(ctrl)
+        ctrl_lo.setContentsMargins(14, 8, 14, 8); ctrl_lo.setSpacing(8)
 
-        # Overlap toggle
-        self._overlap_state = self.sb.overlap
-        self._overlap_btn = tk.Label(
-            ctrl, text=self._toggle_label("OVERLAP", self._overlap_state),
-            bg=GREEN if self._overlap_state else BG_INPUT,
-            fg=BG_ROOT if self._overlap_state else FG_DIM,
-            font=FONT_MONO_L, cursor="hand2", padx=8, pady=4,
-        )
-        self._overlap_btn.pack(side="left", padx=(0, 6))
-        self._overlap_btn.bind("<Button-1>", lambda e: self._on_overlap_toggle())
+        self._overlap_btn = _ToggleBtn("OVERLAP", self.sb.overlap)
+        self._overlap_btn.set_callback(self._on_overlap_toggle)
+        ctrl_lo.addWidget(self._overlap_btn)
 
-        # Monitor toggle
-        self._monitor_state = self.sb.monitor_enabled
-        self._monitor_btn = tk.Label(
-            ctrl, text=self._toggle_label("🔈 MONITOR", self._monitor_state),
-            bg=GREEN if self._monitor_state else BG_INPUT,
-            fg=BG_ROOT if self._monitor_state else FG_DIM,
-            font=FONT_MONO_L, cursor="hand2", padx=8, pady=4,
-        )
-        self._monitor_btn.pack(side="left", padx=(0, 10))
-        self._monitor_btn.bind("<Button-1>", lambda e: self._on_monitor_toggle())
+        self._monitor_btn = _ToggleBtn("MONITOR", self.sb.monitor_enabled)
+        self._monitor_btn.set_callback(self._on_monitor_toggle)
+        ctrl_lo.addWidget(self._monitor_btn)
 
-        # SFX level slider
-        self._sfx_canvas = tk.Canvas(
-            ctrl, height=16, bg=BG_INPUT, highlightthickness=0, cursor="hand2"
-        )
-        self._sfx_canvas.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self._sfx_canvas.bind("<Button-1>",  self._on_sfx_click)
-        self._sfx_canvas.bind("<B1-Motion>", self._on_sfx_click)
-        self._draw_sfx_bar()
-
-        self._sfx_pct_var = tk.StringVar(value=f"{int(self.sb.master_volume*100):3d}%")
-        tk.Label(ctrl, textvariable=self._sfx_pct_var,
-                 bg=BG_CARD, fg=GREEN, font=FONT_MONO, width=4).pack(side="left")
-        tk.Label(ctrl, text="SFX", bg=BG_CARD, fg=FG_DIM,
-                 font=FONT_MONO_L).pack(side="left")
-
-        tk.Frame(root, bg=GRID_COL, height=1).pack(fill="x")
+        # SFX bar + label grouped together
+        sfx_group = QHBoxLayout(); sfx_group.setSpacing(6)
+        self._sfx_bar = _SFXBar(self.sb.master_volume)
+        self._sfx_bar.set_on_change(self._on_sfx)
+        self._sfx_pct = QLabel(f"{int(self.sb.master_volume * 100)}%")
+        self._sfx_pct.setFont(FONT_MONO_L)
+        self._sfx_pct.setStyleSheet("color: #00e676; min-width: 32px;")
+        sfx_lbl = QLabel("SFX")
+        sfx_lbl.setFont(FONT_MONO_S)
+        sfx_lbl.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        sfx_group.addWidget(self._sfx_bar, stretch=1)
+        sfx_group.addWidget(self._sfx_pct)
+        sfx_group.addWidget(sfx_lbl)
+        ctrl_lo.addLayout(sfx_group, stretch=1)
+        root.addWidget(ctrl)
+        root.addWidget(_hdivider(QColor("#0d1f0d")))
 
         # ── Scrollable button grid ─────────────────────────────────────────────
-        grid_outer = tk.Frame(root, bg=BG)
-        grid_outer.pack(fill="both", expand=True)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setStyleSheet(
+            "QScrollArea { border: none; background: #060d06; }"
+            "QScrollBar:vertical { background: #080f08; width: 8px; border: none; }"
+            "QScrollBar::handle:vertical { background: #004d28; min-height: 24px; border-radius: 4px; }"
+            "QScrollBar::handle:vertical:hover { background: #00e676; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
+        )
 
-        canvas = tk.Canvas(grid_outer, bg=BG, highlightthickness=0, height=GRID_H)
+        self._grid_widget = QWidget()
+        self._grid_widget.setStyleSheet("background: #060d06;")
+        self._grid_layout = QGridLayout(self._grid_widget)
+        self._grid_layout.setContentsMargins(8, 8, 8, 8)
+        self._grid_layout.setSpacing(6)
 
-        vsb = _CustomScrollbar(grid_outer, command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
+        # Empty-state placeholder
+        self._placeholder = QLabel(
+            "NO SOUNDS LOADED\n\n"
+            "▼ IMPORT a soundboard profile\n"
+            "or  + ADD individual audio files")
+        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._placeholder.setFont(FONT_MONO_L)
+        self._placeholder.setStyleSheet("color: #1a3f1a; padding: 40px;")
+        self._placeholder.setWordWrap(True)
+        self._grid_layout.addWidget(self._placeholder, 0, 0, 1, BTN_COLS)
 
-        self._grid_frame = tk.Frame(canvas, bg=BG)
-        self._grid_win   = canvas.create_window((0, 0), window=self._grid_frame,
-                                                 anchor="nw")
-
-        def _on_canvas_configure(e):
-            canvas.itemconfig(self._grid_win, width=canvas.winfo_width())
-
-        canvas.bind("<Configure>", _on_canvas_configure)
-        canvas.bind_all("<MouseWheel>",
-                        lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
-        self._grid_canvas = canvas
+        self._scroll.setWidget(self._grid_widget)
+        root.addWidget(self._scroll, stretch=1)
 
         # ── Status bar ────────────────────────────────────────────────────────
-        tk.Frame(root, bg=GREEN_LO, height=1).pack(fill="x", side="bottom")
-        status_bar = tk.Frame(root, bg=BG_ROOT, pady=5, padx=16)
-        status_bar.pack(fill="x", side="bottom")
-        self._status_var = tk.StringVar(value="Ready")
-        tk.Label(status_bar, textvariable=self._status_var,
-                 bg=BG_ROOT, fg=FG_DIM, font=FONT_MONO_L).pack(side="left")
+        root.addWidget(_hdivider(QColor("#0d1f0d")))
+        sb = QWidget()
+        sb.setAutoFillBackground(True)
+        pal = sb.palette(); pal.setColor(QPalette.ColorRole.Window, QColor("#020502"))
+        sb.setPalette(pal)
+        sb_lo = QHBoxLayout(sb); sb_lo.setContentsMargins(14, 5, 14, 6)
+        self._status_lbl = QLabel("Ready")
+        self._status_lbl.setFont(FONT_MONO_S)
+        self._status_lbl.setStyleSheet("color: #1a3f1a;")
+        self._playing_lbl = QLabel("")
+        self._playing_lbl.setFont(FONT_MONO_S)
+        self._playing_lbl.setStyleSheet("color: #00e676;")
+        sb_lo.addWidget(self._status_lbl)
+        sb_lo.addStretch()
+        sb_lo.addWidget(self._playing_lbl)
+        root.addWidget(sb)
 
-        # ── Right snap bar (overlay) — lights up when snapped to main's left ──
-        from snap_bar import SnapBar, BAR_WIDTH
-        self._snap_bar_r = SnapBar(root)
-        self._snap_bar_r.place(relx=1.0, x=-BAR_WIDTH, y=0,
-                               width=BAR_WIDTH, relheight=1.0)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Button grid
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── Grid management ───────────────────────────────────────────────────────
 
     def _refresh_buttons(self) -> None:
-        if self._root is None:
-            return
-        sounds   = self.sb.sounds
-        playing  = self.sb.playing_names
-        existing = set(self._btn_frames.keys())
-        current  = set(sounds.keys())
+        sounds  = self.sb.sounds
+        playing = self.sb.playing_names
 
-        for name in existing - current:
-            w = self._btn_frames.pop(name, None)
-            if w:
-                w.destroy()
+        # Remove stale buttons
+        gone = set(self._btns) - set(sounds)
+        for name in gone:
+            btn = self._btns.pop(name)
+            btn.setParent(None)
+            btn.deleteLater()
 
-        for name in current - existing:
-            self._create_button(name, sounds[name])
-
-        for name, frame in self._btn_frames.items():
-            is_playing = name in playing
-            col = GREEN_ACT if is_playing else GREEN_DIM
-            try:
-                frame.config(highlightbackground=col,
-                             highlightthickness=2 if is_playing else 1)
-            except Exception:
-                pass
-
-        self._reflow_grid()
-
-        n = len(current)
-        self._status_var.set(
-            f"{n} sound{'s' if n != 1 else ''} loaded"
-            + (f"  ·  {len(playing)} playing" if playing else "")
-        )
-
-    def _create_button(self, name: str, sound) -> None:
-        frame = tk.Frame(
-            self._grid_frame, bg=BG_CARD, width=BTN_W, height=BTN_H,
-            highlightbackground=GREEN_DIM, highlightthickness=1,
-            cursor="hand2",
-        )
-        frame.pack_propagate(False)
-        self._btn_frames[name] = frame
-
-        # Dynamic font: shrink for longer names so everything fits in the tile
-        n = len(name)
-        if n <= 10:
-            font = FONT_MONO       # Consolas 9
-        elif n <= 16:
-            font = FONT_MONO_L     # Consolas 8
-        else:
-            font = ("Consolas", 7) # extra small for very long names
-        name_lbl = tk.Label(frame, text=name, bg=BG_CARD, fg=FG,
-                            font=font, wraplength=BTN_W - 10, justify="center")
-        name_lbl.pack(expand=True)
-
-        vol_canvas = tk.Canvas(frame, height=4, bg=BG_INPUT, highlightthickness=0)
-        vol_canvas.pack(fill="x", side="bottom", padx=4, pady=(0, 4))
-        self._draw_vol_bar(vol_canvas, sound.volume)
-
-        def _play(e, n=name):
-            self.sb.play(n)
-            self._refresh_buttons()
-
-        def _enter(e, f=frame):
-            f.config(bg=BG_INPUT)
-            for c in f.winfo_children():
-                try: c.config(bg=BG_INPUT)
-                except Exception: pass
-
-        def _leave(e, f=frame):
-            f.config(bg=BG_CARD)
-            for c in f.winfo_children():
-                try: c.config(bg=BG_CARD)
-                except Exception: pass
-
-        def _right_click(e, n=name, vc=vol_canvas):
-            self._show_context_menu(e, n, vc)
-
-        for w in [frame, name_lbl, vol_canvas]:
-            w.bind("<Button-1>", _play)
-            w.bind("<Enter>",    _enter)
-            w.bind("<Leave>",    _leave)
-            w.bind("<Button-3>", _right_click)
-
-    def _reflow_grid(self) -> None:
-        PAD = 6
-        n   = len(self._btn_frames)
-        for i, (name, frame) in enumerate(self._btn_frames.items()):
-            row, col = divmod(i, BTN_COLS)
-            x = PAD + col * (BTN_W + PAD)
-            y = PAD + row * (BTN_H + PAD)
-            frame.place(x=x, y=y, width=BTN_W, height=BTN_H)
-
-        n_rows   = max(1, (n + BTN_COLS - 1) // BTN_COLS)
-        total_h  = PAD + n_rows * (BTN_H + PAD)
-        total_w  = PAD + BTN_COLS * (BTN_W + PAD)
-        self._grid_frame.config(width=total_w, height=total_h)
-        self._grid_canvas.configure(scrollregion=(0, 0, total_w, total_h))
-
-    def _draw_vol_bar(self, canvas: tk.Canvas, volume: float) -> None:
-        canvas.update_idletasks()
-        w = canvas.winfo_width() or BTN_W - 8
-        canvas.delete("all")
-        filled = max(1, int(w * volume))
-        canvas.create_rectangle(0, 0, filled, 4, fill=GREEN_DIM, outline="")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Context menu
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _show_context_menu(self, event, name: str,
-                           vol_canvas: tk.Canvas) -> None:
-        menu = tk.Menu(self._root, tearoff=0,
-                       bg=BG_CARD, fg=FG, activebackground=GREEN_DIM,
-                       activeforeground=BG_ROOT, font=FONT_MONO_L, bd=0,
-                       relief="flat")
-
-        menu.add_command(label=f"  ▶  Play '{name}'",
-                         command=lambda: self.sb.play(name))
-        menu.add_command(label=f"  ■  Stop '{name}'",
-                         command=lambda: self.sb.stop(name))
-        menu.add_separator()
-
-        def _set_volume():
-            self._show_volume_popup(name, vol_canvas)
-
-        def _rename():
-            self._show_rename_popup(name)
-
-        def _remove():
-            if messagebox.askyesno("Remove Sound",
-                                   f"Remove '{name}' from the soundboard?\n"
-                                   f"(Removes from VocalClear's sounds folder.\n"
-                                   f"Your original source file is unchanged.)",
-                                   parent=self._root):
-                self.sb.remove_sound(name)
-                self._refresh_buttons()
-
-        menu.add_command(label="  🔊  Set volume…",  command=_set_volume)
-        menu.add_command(label="  ✏  Rename…",       command=_rename)
-        menu.add_separator()
-        menu.add_command(label="  ✕  Remove",        command=_remove)
-
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    def _show_rename_popup(self, name: str) -> None:
-        """Modal popup to rename a soundboard sound."""
-        top, w = self._popup_shell("RENAME", name)
-
-        body = tk.Frame(top, bg=BG, padx=16, pady=14)
-        body.pack(fill="x")
-        tk.Label(body, text="NEW NAME", bg=BG, fg=FG_DIM,
-                 font=FONT_MONO_L).pack(anchor="w", pady=(0, 4))
-        entry = tk.Entry(body, bg=BG_INPUT, fg=GREEN, font=FONT_MONO,
-                         insertbackground=GREEN, relief="flat",
-                         highlightthickness=1, highlightcolor=GREEN,
-                         highlightbackground=GREEN_LO)
-        entry.insert(0, name)
-        entry.pack(fill="x", ipady=4)
-
-        result: list = []
-
-        def _cancel():
-            top.destroy()
-
-        def _save():
-            new_name = entry.get().strip()
-            if not new_name or new_name == name:
-                top.destroy()
-                return
-            ok = self.sb.rename_sound(name, new_name)
-            top.destroy()
-            if not ok:
-                messagebox.showerror(
-                    "Rename Failed",
-                    f"Could not rename '{name}' to '{new_name}'.\n"
-                    "The name may already be in use.",
-                    parent=self._root,
+        # Add new buttons
+        for name, snd in sounds.items():
+            if name not in self._btns:
+                btn = _SoundButton(
+                    name, snd,
+                    on_play=self._play,
+                    on_context=self._show_context_menu,
                 )
-            self._refresh_buttons()
+                self._btns[name] = btn
 
-        entry.bind("<Return>", lambda e: _save())
-        self._popup_btn_bar(top, _cancel, _save)
+        # Update playing state + sound ref
+        for name, btn in self._btns.items():
+            btn.set_playing(name in playing)
+            if name in sounds:
+                btn._sound = sounds[name]
+                btn.update()
 
-        top.update_idletasks()
-        ph = top.winfo_reqheight()
-        rx = self._root.winfo_rootx() + (self._root.winfo_width()  - w)  // 2
-        ry = self._root.winfo_rooty() + (self._root.winfo_height() - ph) // 2
-        top.geometry(f"{w}x{ph}+{rx}+{ry}")
-        top.deiconify()
-        top.grab_set()
-        entry.focus_set()
-        entry.select_range(0, tk.END)
-        # No wait_window() — popup stays open; _save()/_cancel() handle everything.
+        # Show/hide placeholder
+        if self._placeholder:
+            self._placeholder.setVisible(not sounds)
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # SFX level bar
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _draw_sfx_bar(self) -> None:
-        c = self._sfx_canvas
-        c.update_idletasks()
-        w = c.winfo_width() or 200
-        h = 16
-        pct = self.sb.master_volume
-        filled = max(1, int(w * pct))
-        c.delete("all")
-        for x in range(0, w, 10):
-            c.create_line(x, 0, x, h, fill=GRID_COL, width=1)
-        c.create_rectangle(0, 2, filled, h - 2, fill=GREEN_DIM, outline="")
-        if filled > 4:
-            c.create_rectangle(filled - 3, 2, filled, h - 2, fill=GREEN, outline="")
-        c.create_line(filled, 0, filled, h, fill=GREEN, width=1)
-
-    def _on_sfx_click(self, event) -> None:
-        w = self._sfx_canvas.winfo_width()
-        if not w:
-            return
-        vol = max(0.0, min(1.0, event.x / w))
-        self.sb.master_volume = vol
-        self._sfx_pct_var.set(f"{int(vol*100):3d}%")
-        self._draw_sfx_bar()
-        self.sb._save_sounds_config()
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # ──────────────────────────────────────────────────────────────────────────
-    # Toggle helpers
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _toggle_label(self, text: str, on: bool) -> str:
-        return f"● {text}" if on else f"○ {text}"
-
-    def _on_overlap_toggle(self) -> None:
-        self._overlap_state = not self._overlap_state
-        self.sb.overlap = self._overlap_state
-        self._overlap_btn.config(
-            text=self._toggle_label("OVERLAP", self._overlap_state),
-            bg=GREEN if self._overlap_state else BG_INPUT,
-            fg=BG_ROOT if self._overlap_state else FG_DIM,
+        # Reflow grid (playing sounds sort to front)
+        sorted_names = sorted(
+            self._btns.keys(),
+            key=lambda n: (0 if n in playing else 1, n.lower())
         )
-        self.sb._save_sounds_config()
+        for i, name in enumerate(sorted_names):
+            row, col = divmod(i, BTN_COLS)
+            self._grid_layout.addWidget(self._btns[name], row, col)
 
-    def _on_monitor_toggle(self) -> None:
-        self._monitor_state = not self._monitor_state
-        self.sb.monitor_enabled = self._monitor_state
-        self._monitor_btn.config(
-            text=self._toggle_label("🔈 MONITOR", self._monitor_state),
-            bg=GREEN if self._monitor_state else BG_INPUT,
-            fg=BG_ROOT if self._monitor_state else FG_DIM,
+        # Status bar
+        n = len(sounds)
+        self._status_lbl.setText(
+            f"{n} sound{'s' if n != 1 else ''} loaded" if n else "No sounds loaded")
+        np = len(playing)
+        self._playing_lbl.setText(
+            f"● {np} playing" if np else "")
+
+    # ── Context menu ──────────────────────────────────────────────────────────
+
+    def _show_context_menu(self, name: str, pos: QPoint) -> None:
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: #0b160b; color: #c8ffd4; border: 1px solid #007a40; }"
+            "QMenu::item { padding: 5px 20px; font-family: Consolas; font-size: 8pt; }"
+            "QMenu::item:selected { background: #007a40; color: #030603; }"
+            "QMenu::separator { height: 1px; background: #004d28; margin: 2px 0; }"
         )
-        self.sb._save_sounds_config()
+        menu.addAction(f"  ▶  Play",         lambda: self._play(name))
+        menu.addAction(f"  ▪  Stop",         lambda: self._stop_one(name))
+        menu.addSeparator()
+        menu.addAction("  VOL  Set volume…", lambda: self._show_volume(name))
+        menu.addAction("  REN  Rename…",     lambda: self._rename(name))
+        menu.addSeparator()
+        menu.addAction("  DEL  Remove",      lambda: self._remove(name))
+        menu.exec(pos)
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Actions
-    # ──────────────────────────────────────────────────────────────────────────
+    # ── Actions ───────────────────────────────────────────────────────────────
+
+    def _play(self, name: str) -> None:
+        self.sb.play(name); self._refresh_buttons()
+
+    def _stop_one(self, name: str) -> None:
+        self.sb.stop(name); self._refresh_buttons()
+
+    def _stop_all(self) -> None:
+        self.sb.stop(); self._refresh_buttons()
 
     def _add_sound(self) -> None:
-        paths = filedialog.askopenfilenames(
-            title="Add Sound Files", parent=self._root,
-            filetypes=[
-                ("Audio files", "*.mp3 *.ogg *.m4a *.wav *.flac"),
-                ("All files",   "*.*"),
-            ],
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Add Sound Files", "",
+            "Audio files (*.mp3 *.ogg *.m4a *.wav *.flac);;All files (*.*)",
         )
         for p in paths:
             threading.Thread(
-                target=lambda f=Path(p): self.sb.load_file(f), daemon=True
-            ).start()
-
-    def _stop_all(self) -> None:
-        self.sb.stop()
-        self._refresh_buttons()
+                target=lambda f=Path(p): self.sb.load_file(f), daemon=True).start()
 
     def _do_export(self) -> None:
-        path = filedialog.asksaveasfilename(
-            title="Export Soundboard Profile",
-            parent=self._root,
-            defaultextension=".zip",
-            filetypes=[("ZIP profile", "*.zip"), ("All files", "*.*")],
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Soundboard Profile", "",
+            "ZIP profile (*.zip);;All files (*.*)",
         )
         if not path:
             return
-
         def _run():
             try:
                 self.sb.export_profile(Path(path))
-                if self._root:
-                    self._root.after(0, lambda: self._set_header_status("EXPORTED ✔"))
+                QTimer.singleShot(0, lambda: self._set_header_status("EXPORTED"))
             except Exception as e:
-                if self._root:
-                    self._root.after(0, lambda: messagebox.showerror(
-                        "Export Failed", str(e), parent=self._root))
-
+                QTimer.singleShot(0, lambda: QMessageBox.critical(
+                    self, "Export Failed", str(e)))
         threading.Thread(target=_run, daemon=True).start()
 
     def _do_import(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Import Soundboard Profile",
-            parent=self._root,
-            filetypes=[("ZIP profile", "*.zip"), ("All files", "*.*")],
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Soundboard Profile", "",
+            "ZIP profile (*.zip);;All files (*.*)",
         )
         if not path:
             return
-
-        merge = messagebox.askyesno(
-            "Import Profile",
-            "Merge imported sounds with existing ones?\n\n"
-            "Yes = keep existing sounds and add imported ones\n"
-            "No  = replace all sounds with the imported profile",
-            parent=self._root,
-        )
-
+        mb = QMessageBox(self)
+        mb.setWindowTitle("Import Profile")
+        mb.setText("Merge imported sounds with existing ones?\n\n"
+                   "Yes = keep existing + add imported\n"
+                   "No  = replace all sounds")
+        mb.setStyleSheet(
+            "QMessageBox { background: #030603; color: #c8ffd4; }"
+            "QPushButton { background: #007a40; color: #030603; padding: 4px 12px; "
+            "              border: none; font-family: Consolas; }"
+            "QPushButton:hover { background: #00e676; }")
+        mb.setStandardButtons(QMessageBox.StandardButton.Yes |
+                              QMessageBox.StandardButton.No  |
+                              QMessageBox.StandardButton.Cancel)
+        result = mb.exec()
+        if result == QMessageBox.StandardButton.Cancel:
+            return
+        merge = (result == QMessageBox.StandardButton.Yes)
         def _run():
             try:
                 self.sb.import_profile(Path(path), merge=merge)
-                if self._root:
-                    self._root.after(0, lambda: self._set_header_status("IMPORTED ✔"))
+                QTimer.singleShot(0, lambda: self._set_header_status("IMPORTED"))
             except Exception as e:
-                if self._root:
-                    self._root.after(0, lambda: messagebox.showerror(
-                        "Import Failed", str(e), parent=self._root))
-
+                QTimer.singleShot(0, lambda: QMessageBox.critical(
+                    self, "Import Failed", str(e)))
         threading.Thread(target=_run, daemon=True).start()
 
-    def _set_header_status(self, msg: str) -> None:
-        """Briefly show a status message in the header, then clear it."""
-        if not self._root:
-            return
-        # Reuse the existing status label if present, otherwise skip
-        if hasattr(self, "_header_status_lbl") and self._header_status_lbl:
-            self._header_status_lbl.config(text=msg)
-            self._root.after(3000, lambda: (
-                self._header_status_lbl.config(text="") if self._header_status_lbl else None
-            ))
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Helpers
-    # ──────────────────────────────────────────────────────────────────────────
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Styled popups
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _popup_shell(self, title: str, subtitle: str,
-                     w: int = 340) -> tuple[tk.Toplevel, int]:
-        """
-        Create a styled modal Toplevel.
-        Returns (top, w) — caller must set final geometry after building content.
-        """
-        top = tk.Toplevel(self._root)
-        top.withdraw()          # hide until positioned (prevents flicker)
-        top.title(title)
-        top.configure(bg=BG_ROOT)
-        top.resizable(False, False)
-        top.transient(self._root)
-
-        # App icon
-        ico = Path(__file__).parent / "vocalclear.ico"
-        try:
-            if ico.exists():
-                top.iconbitmap(str(ico))
-        except Exception:
-            pass
-
-        # Dark title bar
-        try:
-            import ctypes
-            from window_snapper import _frame_hwnd
-            hwnd = _frame_hwnd(top)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int))
-        except Exception:
-            pass
-
-        # Header
-        tk.Frame(top, bg=GREEN, height=2).pack(fill="x")
-        hdr = tk.Frame(top, bg=BG_ROOT, padx=14, pady=8)
-        hdr.pack(fill="x")
-        tk.Label(hdr, text=title.upper(), bg=BG_ROOT, fg=GREEN,
-                 font=("Consolas", 10, "bold")).pack(side="left")
-        tk.Label(hdr, text=f"  ·  {subtitle}", bg=BG_ROOT, fg=FG_DIM,
-                 font=FONT_MONO_L).pack(side="left")
-        tk.Frame(top, bg=GREEN_LO, height=1).pack(fill="x")
-
-        return top, w
-
-    def _popup_btn_bar(self, top: tk.Toplevel,
-                       on_cancel, on_save,
-                       save_label: str = "SAVE") -> None:
-        """Attach the standard Cancel / Save button row to a popup."""
-        tk.Frame(top, bg=GREEN_LO, height=1).pack(fill="x", side="bottom")
-        bar = tk.Frame(top, bg=BG_ROOT, padx=14, pady=8)
-        bar.pack(fill="x", side="bottom")
-
-        def _mk(parent, text, cmd, col):
-            f = tk.Frame(parent, bg=col, cursor="hand2")
-            lbl = tk.Label(f, text=f"[ {text} ]",
-                           bg=col, fg=BG_ROOT, font=FONT_MONO_L, padx=8, pady=4)
-            lbl.pack()
-            f.pack(side="right", padx=(4, 0))
-            bright = GREEN if col == GREEN_DIM else "#cc1133"
-            for w in (f, lbl):
-                w.bind("<Button-1>", lambda e, c=cmd: c())
-                w.bind("<Enter>", lambda e, fw=f, lw=lbl, b=bright:
-                       (fw.config(bg=b), lw.config(bg=b)))
-                w.bind("<Leave>", lambda e, fw=f, lw=lbl, o=col:
-                       (fw.config(bg=o), lw.config(bg=o)))
-
-        _mk(bar, save_label, on_save, GREEN_DIM)
-        _mk(bar, "CANCEL",   on_cancel, "#3a1010")
-
-    def _show_volume_popup(self, name: str, vol_canvas: tk.Canvas) -> None:
-        """Modal volume slider popup."""
+    def _show_volume(self, name: str) -> None:
         snd = self.sb.sounds.get(name)
-        init_vol = snd.volume if snd else 1.0
-
-        top, w = self._popup_shell("VOLUME", name)
-        body = tk.Frame(top, bg=BG_ROOT, padx=16, pady=14)
-        body.pack(fill="x")
-
-        # Percentage label
-        pct_var = tk.StringVar(value=f"{int(init_vol*100):3d}%")
-        row = tk.Frame(body, bg=BG_ROOT)
-        row.pack(fill="x", pady=(0, 8))
-        tk.Label(row, text="LEVEL", bg=BG_ROOT, fg=FG_DIM,
-                 font=FONT_MONO_L).pack(side="left")
-        tk.Label(row, textvariable=pct_var, bg=BG_ROOT, fg=GREEN,
-                 font=FONT_MONO, width=5).pack(side="right")
-
-        # Slider canvas
-        slider = tk.Canvas(body, height=20, bg=BG_INPUT,
-                           highlightthickness=0, cursor="hand2")
-        slider.pack(fill="x")
-        hint = tk.Label(body, text="← drag to set level",
-                        bg=BG_ROOT, fg=FG_DIM, font=FONT_MONO_L)
-        hint.pack(anchor="w", pady=(4, 0))
-
-        vol = [init_vol]   # mutable so closures can write
-
-        def _draw():
-            slider.update_idletasks()
-            cw = slider.winfo_width() or 290
-            ch = 20
-            v  = vol[0]
-            filled = max(1, int(cw * v))
-            slider.delete("all")
-            for x in range(0, cw, 12):
-                slider.create_line(x, 0, x, ch, fill=GRID_COL, width=1)
-            slider.create_rectangle(0, 3, filled, ch - 3, fill=GREEN_DIM, outline="")
-            if filled > 4:
-                slider.create_rectangle(filled - 4, 3, filled, ch - 3,
-                                        fill=GREEN, outline="")
-            slider.create_line(filled, 0, filled, ch, fill=GREEN, width=1)
-            pct_var.set(f"{int(v*100):3d}%")
-
-        def _click(event):
-            cw = slider.winfo_width()
-            if not cw:
-                return
-            vol[0] = max(0.0, min(1.0, event.x / cw))
-            _draw()
-
-        slider.bind("<Button-1>",  _click)
-        slider.bind("<B1-Motion>", _click)
-        slider.bind("<Configure>", lambda _e: _draw())
-
-        def _save():
-            v = vol[0]
-            top.destroy()
-            self.sb.set_volume(name, v)
-            self._draw_vol_bar(vol_canvas, v)
-
-        def _cancel():
-            top.destroy()
-
-        self._popup_btn_bar(top, _cancel, _save)
-        top.update_idletasks()
-        ph = top.winfo_reqheight()
-        rx = self._root.winfo_rootx() + (self._root.winfo_width()  - w)  // 2
-        ry = self._root.winfo_rooty() + (self._root.winfo_height() - ph) // 2
-        top.geometry(f"{w}x{ph}+{rx}+{ry}")
-        top.deiconify()
-        top.grab_set()
-        top.focus_force()
-        # No wait_window() — popup stays open; _save()/_cancel() handle everything.
-
-    def _btn_widget(self, parent, text: str, cmd,
-                    side="left", color=GREEN_DIM) -> tk.Label:
-        f = tk.Frame(parent, bg=color, cursor="hand2")
-        lbl = tk.Label(f, text=text, bg=color,
-                       fg=BG_ROOT if color != BG_CARD else FG,
-                       font=FONT_MONO_L, padx=8, pady=4)
-        lbl.pack()
-        f.pack(side=side, padx=(0, 4))
-        bright = GREEN if color == GREEN_DIM else "#cc0033"
-        for w in (f, lbl):
-            w.bind("<Button-1>", lambda e, c=cmd: c())
-            w.bind("<Enter>", lambda e, fw=f, lw=lbl, b=bright:
-                   (fw.config(bg=b), lw.config(bg=b)))
-            w.bind("<Leave>", lambda e, fw=f, lw=lbl, orig=color:
-                   (fw.config(bg=orig), lw.config(bg=orig)))
-        return lbl
-
-    def _tick_snap_bar(self) -> None:
-        if not self._root or not self._snapper:
+        if snd is None:
             return
-        _, right = self._snapper.get_snap_sides("soundboard")
-        if self._snap_bar_r:
-            self._snap_bar_r.set_active(right)
-        self._root.after(200, self._tick_snap_bar)
+        def _save(v: float) -> None:
+            self.sb.set_volume(name, v)
+            if name in self._btns:
+                self._btns[name].update()
+        popup = _VolumePopup(name, snd.volume, _save, parent=self)
+        popup.show()
+
+    def _rename(self, name: str) -> None:
+        text, ok = QInputDialog.getText(
+            self, "Rename Sound", "New name:", QLineEdit.EchoMode.Normal, name)
+        text = text.strip() if ok else ""
+        if not text or text == name:
+            return
+        if not self.sb.rename_sound(name, text):
+            QMessageBox.warning(self, "Rename Failed",
+                f"Could not rename '{name}' to '{text}'.\n"
+                "The name may already be in use.")
+        self._refresh_buttons()
+
+    def _remove(self, name: str) -> None:
+        mb = QMessageBox(self)
+        mb.setWindowTitle("Remove Sound")
+        mb.setText(
+            f"Remove '{name}' from the soundboard?\n"
+            "(Removes from VocalClear's sounds folder.\n"
+            "Your original source file is unchanged.)")
+        mb.setStyleSheet(
+            "QMessageBox { background: #030603; color: #c8ffd4; }"
+            "QPushButton { background: #007a40; color: #030603; padding: 4px 12px; "
+            "              border: none; font-family: Consolas; }"
+            "QPushButton:hover { background: #00e676; }")
+        mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if mb.exec() == QMessageBox.StandardButton.Yes:
+            self.sb.remove_sound(name)
+            self._refresh_buttons()
+
+    # ── Toggle callbacks ──────────────────────────────────────────────────────
+
+    def _on_overlap_toggle(self) -> None:
+        new = not self._overlap_btn.state
+        self.sb.overlap = new
+        self._overlap_btn.state = new
+        self.sb._save_sounds_config()
+
+    def _on_monitor_toggle(self) -> None:
+        new = not self._monitor_btn.state
+        self.sb.monitor_enabled = new
+        self._monitor_btn.state = new
+        self.sb._save_sounds_config()
+
+    def _on_sfx(self, v: float) -> None:
+        self.sb.master_volume = v
+        self._sfx_pct.setText(f"{int(v * 100)}%")
+        self.sb._save_sounds_config()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _set_header_status(self, msg: str) -> None:
+        if self._header_status:
+            self._header_status.setText(f"  {msg}")
+            QTimer.singleShot(3000, lambda: (
+                self._header_status.setText("") if self._header_status else None))
 
     def _schedule_refresh(self) -> None:
-        # Called from ANY thread (folder watcher, hotkey callback, Tk thread).
-        # Only sets a thread-safe flag — never touches Tkinter directly.
         self._refresh_pending.set()
 
     def _poll_refresh(self) -> None:
-        # Runs only on the Tk thread (scheduled via after).
-        # Drains the refresh flag and calls _refresh_buttons if needed.
-        if not self._root:
-            return
         if self._refresh_pending.is_set():
             self._refresh_pending.clear()
             self._refresh_buttons()
-        self._root.after(50, self._poll_refresh)
 
-    def _on_close(self) -> None:
-        self._running = False
+    # ── Window events ─────────────────────────────────────────────────────────
+
+    def showEvent(self, event) -> None:
+        if self._snapper:
+            self._snapper.position_left_of("main", self)
+        self._refresh_buttons()
+        event.accept()
+
+    def closeEvent(self, event) -> None:
+        self._refresh_timer.stop()
         if self._snapper:
             self._snapper.unregister("soundboard")
         self.sb._on_sounds_changed = None
         self.sb._on_play_changed   = None
-        if self._root:
-            self._root.destroy()
-            self._root = None
+        event.accept()

@@ -14,9 +14,9 @@ windows touch with zero visual gap.
 
 Threading model
 ───────────────
-Each window lives on its own thread with its own tkinter mainloop.
+All windows live on the Qt main thread with a single QApplication event loop.
   • Position reading: Win32 GetWindowRect  (callable from any thread).
-  • Position polling: root.after() loop    (runs on that window's own thread).
+  • Position polling: QTimer.singleShot()  (runs on the Qt main thread).
   • Companion move:   Win32 SetWindowPos   (thread-safe kernel call).
   • State:            protected by a threading.Lock.
 """
@@ -28,8 +28,10 @@ import ctypes.wintypes
 import threading
 from typing import Optional
 
-_GA_ROOT                    = 2    # GetAncestor → top-level frame
-_DWMWA_EXTENDED_FRAME_BOUNDS = 9   # visible client area rect
+from PySide6.QtCore import QTimer
+
+_GA_ROOT                     = 2    # GetAncestor → top-level frame
+_DWMWA_EXTENDED_FRAME_BOUNDS = 9    # visible client area rect
 
 _SWP_NOSIZE     = 0x0001
 _SWP_NOZORDER   = 0x0004
@@ -40,11 +42,9 @@ _SWP_NOACTIVATE = 0x0010
 # Low-level Win32 helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _frame_hwnd(root) -> int:
-    """Return the outer frame HWND for a tk.Tk() window."""
-    inner = root.winfo_id()
-    hwnd  = ctypes.windll.user32.GetAncestor(inner, _GA_ROOT)
-    return hwnd if hwnd else inner
+def _qt_hwnd(window) -> int:
+    """Return the native HWND for a QWidget/QMainWindow."""
+    return int(window.winId())
 
 
 def _get_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -93,8 +93,8 @@ def _set_pos(hwnd: int, x: int, y: int) -> None:
 
 class SnapManager:
     """
-    Register Tk windows; they snap flush on left/right edges when dragged
-    within SNAP_DIST pixels.  All connected windows move as a chain.
+    Register QMainWindow instances; they snap flush on left/right edges when
+    dragged within SNAP_DIST pixels.  All connected windows move as a chain.
 
     Snap record: (name_a, name_b, off_x, off_y)
         pos_b = pos_a + (off_x, off_y)   [in GetWindowRect coordinates]
@@ -127,10 +127,10 @@ class SnapManager:
         """
         self._anchor = name
 
-    def register(self, name: str, root, snap_side: str = "any") -> None:
+    def register(self, name: str, window, snap_side: str = "any") -> None:
         """
-        Register a visible tk.Tk() window.  Call from inside a root.after()
-        callback so the window is fully mapped and winfo_id() is valid.
+        Register a visible QMainWindow.  Call from a QTimer.singleShot() with
+        a short delay so the window is fully shown and winId() is valid.
 
         snap_side:
           "any"        — window may snap on either side of a partner  (default)
@@ -139,20 +139,19 @@ class SnapManager:
           "right-only" — window may only be the RIGHT member of a snap pair
                          (e.g. settings always sits to the right of main)
         """
-        hwnd = _frame_hwnd(root)
+        hwnd = _qt_hwnd(window)
         rect = _get_rect(hwnd)
         li, ri = _insets(hwnd)
         with self._lock:
             self._wins[name] = {
-                "hwnd":       hwnd,
-                "root":       root,
-                "last_pos":   rect,
-                "prog_pos":   None,
-                "left_inset": li,
+                "hwnd":        hwnd,
+                "last_pos":    rect,
+                "prog_pos":    None,
+                "left_inset":  li,
                 "right_inset": ri,
             }
             self._snap_sides[name] = snap_side
-        root.after(self.POLL_MS, lambda n=name: self._poll(n))
+        QTimer.singleShot(self.POLL_MS, lambda n=name: self._poll(n))
 
     def unregister(self, name: str) -> None:
         with self._lock:
@@ -182,45 +181,46 @@ class SnapManager:
 
     # ── Default positioning ──────────────────────────────────────────────────
 
-    def position_right_of(self, parent_name: str, child_root) -> None:
-        """Position child_root immediately to the right of the named window."""
+    def position_right_of(self, parent_name: str, child_window) -> None:
+        """Position child_window immediately to the right of the named window."""
         with self._lock:
             info = self._wins.get(parent_name)
         if info:
             px, py, pw, ph = info["last_pos"]
             p_li, p_ri = info["left_inset"], info["right_inset"]
-            # Align child's visible left with parent's visible right (flush)
-            c_li, c_ri = _insets(_frame_hwnd(child_root))
+            child_hwnd = _qt_hwnd(child_window)
+            c_li, c_ri = _insets(child_hwnd)
             target_x = px + pw - p_ri - c_li
-            child_root.geometry(f"+{target_x}+{py}")
+            _set_pos(child_hwnd, target_x, py)
 
-    def position_left_of(self, parent_name: str, child_root) -> None:
-        """Position child_root immediately to the left of the named window."""
+    def position_left_of(self, parent_name: str, child_window) -> None:
+        """Position child_window immediately to the left of the named window."""
         with self._lock:
             info = self._wins.get(parent_name)
         if info:
             px, py, pw, ph = info["last_pos"]
             p_li, p_ri = info["left_inset"], info["right_inset"]
-            cw = child_root.winfo_reqwidth() or pw
-            c_li, c_ri = _insets(_frame_hwnd(child_root))
-            # Align child's visible right with parent's visible left (flush)
+            child_hwnd = _qt_hwnd(child_window)
+            cw = _get_rect(child_hwnd)[2]
+            c_li, c_ri = _insets(child_hwnd)
             target_x = px + p_li - (cw - c_ri)
-            child_root.geometry(f"+{target_x}+{py}")
+            _set_pos(child_hwnd, target_x, py)
 
-    def position_below(self, parent_name: str, child_root) -> None:
-        """Position child_root immediately below the named window (legacy)."""
+    def position_below(self, parent_name: str, child_window) -> None:
+        """Position child_window immediately below the named window."""
         with self._lock:
             info = self._wins.get(parent_name)
         if info:
             px, py, pw, ph = info["last_pos"]
-            child_root.geometry(f"+{px}+{py + ph}")
+            child_hwnd = _qt_hwnd(child_window)
+            _set_pos(child_hwnd, px, py + ph)
 
     def is_snapped(self) -> bool:
         with self._lock:
             return len(self._snaps) > 0
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Polling (runs on each window's own mainloop thread)
+    # Polling (runs on the Qt main thread via QTimer.singleShot)
     # ─────────────────────────────────────────────────────────────────────────
 
     def _poll(self, name: str) -> None:
@@ -249,10 +249,10 @@ class SnapManager:
         except Exception:
             pass
 
-        try:
-            info["root"].after(self.POLL_MS, lambda n=name: self._poll(n))
-        except Exception:
-            pass
+        with self._lock:
+            still_registered = name in self._wins
+        if still_registered:
+            QTimer.singleShot(self.POLL_MS, lambda n=name: self._poll(n))
 
     # ─────────────────────────────────────────────────────────────────────────
     # Snap / unsnap logic
