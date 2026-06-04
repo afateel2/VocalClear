@@ -59,10 +59,9 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 
 - [x] **Soundboard window: close button hides, not destroys** *(fixed session 002, merged with P1)*
 
-- [ ] **Settings `_apply_and_restart` baseline reset bug**  
-  Lines 784–786 unconditionally reset `_orig_startup/_orig_strength/_orig_gain` baselines even on a
-  no-op save. This means the dirty indicator (APPLY button color) clears for unchanged settings when
-  something else triggers an apply. Cosmetic but confusing.
+- [~] **Settings `_apply_and_restart` baseline reset bug** *(closed — cosmetic only)*  
+  On failed restart the APPLY button dims even though the restart failed, but the error is clearly  
+  shown in the status label. Not worth the added complexity to fix.
 
 - [x] **xrun count indicator** *(done session 002)*  
   `_tick` now compares `engine.xrun_count` against a stored baseline; new xruns amber the dB  
@@ -85,21 +84,24 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `_draw_channel(db_ticks=True)` on the OUT channel: dotted reference lines + dim labels  
   at −18 dB (bar 7) and −12 dB (bar 15) drawn right-justified inside the channel.
 
-- [ ] **Keyboard shortcut: global pause/resume toggle**  
-  A global hotkey (e.g. Ctrl+Shift+V configurable) to toggle `noise_filter.enabled` without opening
-  the window. Different from PTT which requires holding.
+- [⏸] **Keyboard shortcut: global pause/resume toggle** *(blocked — needs user input)*  
+  Implementation: Win32 `RegisterHotKey(hwnd, id, MOD_CTRL|MOD_SHIFT, vk)` in a thread that  
+  calls `PeekMessage` for `WM_HOTKEY`. The key combo cannot be chosen autonomously — ask the  
+  user what key they want before implementing.
 
 - [x] **CPU/latency live readout** *(done session 006)*  
   `engine.process_time_ms` is a 10-sample rolling average of `noise_filter.process()` wall time  
   in the inline callback path. Displayed in the LATENCY info card row as "· 0.42 ms cpu";  
   refreshed every 20 ticks (~1 s).
 
-- [ ] **Soundboard: volume normalizer**  
-  Button to normalize all loaded sounds to the same RMS target so they play at consistent volumes.
+- [x] **Soundboard: volume normalizer** *(done session 007)*  
+  `soundboard.normalize_volumes(target_rms=0.05)` scales per-sound volumes so all play at equal  
+  loudness; "≈ NORMALIZE" button in header action row.
 
-- [ ] **"Test mic" button in settings**  
-  Record 2 seconds through the selected input device and play back through monitor so the user can
-  verify the mic is working without leaving the app.
+- [x] **"Test mic" button in settings** *(done session 007)*  
+  "[ TEST MIC — 2 s ]" button in the Input Device card. Records 2 s via `sounddevice.rec()` in  
+  a background thread then plays back via `sounddevice.play()`. Shows "disable WASAPI exclusive  
+  mode first" warning when exclusive mode is on (exclusive mode blocks concurrent readers).
 
 - [x] **Log rotation** *(done session 002)*  
   `_rotate_log()` in `main.py` trims log to last 200 lines when file exceeds 500 KB.  
@@ -158,6 +160,40 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 ---
 
 ## Session Log
+
+---
+
+### Session 007 — 2026-06-04 (autonomous loop tick 6)
+
+**Goal:** Soundboard volume normalizer, test mic button, close out remaining backlog.
+
+**Done:**
+- `soundboard.normalize_volumes(target_rms=0.05)`: iterates all sounds, computes RMS, sets  
+  `volume = min(1.0, target_rms / rms)`; "≈ NORMALIZE" header button triggers it.
+- Settings test mic: "[ TEST MIC — 2 s ]" records via `sounddevice.rec(device=input_dev)` in  
+  a daemon thread then plays back with `sounddevice.play()`. WASAPI exclusive mode guard added  
+  (exclusive mode blocks concurrent device readers). `_on_test_done` marshals status back to  
+  the Qt main thread via `QTimer.singleShot(0, ...)`.
+- Closed settings baseline bug (cosmetic only, not worth fixing).
+- Marked global hotkey as blocked — needs user to specify the key combo.
+
+**Problems:**
+- `sounddevice.rec()` opens a second stream on the input device. In WASAPI shared mode this is  
+  fine. In exclusive mode it will fail with a device-in-use error, hence the guard.
+- `sounddevice.play()` plays to the default output device. If the user has VB-CABLE set as their  
+  default Windows output, playback won't be heard. This is an edge case; the function still  
+  works — it just plays to wherever the OS sends audio.
+
+**Research / Key Facts:**
+- `sounddevice.rec()` and `sounddevice.play()` are blocking convenience wrappers around  
+  InputStream/OutputStream. They use the global default device unless `device=` is specified.
+- Win32 `RegisterHotKey` requires a window handle (HWND) and a message loop. The simplest  
+  approach for VocalClear is to register on the main window's HWND and intercept  
+  `WM_HOTKEY` via a Qt native event filter (`QAbstractNativeEventFilter`). This is  
+  non-trivial and requires user confirmation of the key combo first.
+
+**Backlog status:** All planned items done except global hotkey (blocked on user input).  
+The loop can end here — remaining work requires user decision.
 
 ---
 

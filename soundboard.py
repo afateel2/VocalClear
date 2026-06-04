@@ -369,6 +369,21 @@ class SoundBoard:
                 self._sounds[name].volume = max(0.0, min(1.0, volume))
         self._save_sounds_config()
 
+    def normalize_volumes(self, target_rms: float = 0.05) -> None:
+        """Scale per-sound volumes so all sounds play at roughly equal loudness.
+
+        target_rms is the desired average RMS (0.0–1.0 scale). Volume is clamped
+        to [0.0, 1.0], so very quiet sounds are left at 1.0 rather than amplified
+        beyond the slider range.
+        """
+        with self._sounds_lock:
+            for snd in self._sounds.values():
+                rms = float(np.sqrt(np.mean(snd.data ** 2)))
+                if rms > 1e-6:
+                    snd.volume = min(1.0, target_rms / rms)
+        self._save_sounds_config()
+        self._fire_sounds_changed()
+
     @property
     def sounds(self) -> dict[str, Sound]:
         with self._sounds_lock:

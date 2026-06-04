@@ -450,10 +450,12 @@ class SettingsWindow(QMainWindow):
         self._excl_btn:      Optional[_ToggleBtn]   = None
         self._ptt_btn:       Optional[_ToggleBtn]   = None
         self._ptt_key_lbl:   Optional[QLabel]       = None
-        self._apply_btn:     Optional[_GlowButton]  = None
-        self._apply_status:  Optional[QLabel]       = None
-        self._calib_btn:     Optional[_GlowButton]  = None
-        self._calib_status:  Optional[QLabel]       = None
+        self._apply_btn:       Optional[_GlowButton]  = None
+        self._apply_status:    Optional[QLabel]       = None
+        self._calib_btn:       Optional[_GlowButton]  = None
+        self._calib_status:    Optional[QLabel]       = None
+        self._test_mic_btn:    Optional[_GlowButton]  = None
+        self._test_mic_status: Optional[QLabel]       = None
 
         self._input_map: dict[str, Optional[int]] = {}
         self._ptt_key_str = config.get("ptt_key", "")
@@ -591,6 +593,17 @@ class SettingsWindow(QMainWindow):
         else:
             dev_name = sd.query_devices(vbc)["name"]
             _lbl_direct(dev, f"●  Virtual mic:  {dev_name}", FONT_MONO_L, "#007a40")
+
+        # Test mic row
+        test_row = QHBoxLayout(); test_row.setSpacing(8)
+        self._test_mic_btn = _GlowButton("[ TEST MIC — 2 s ]", self._do_test_mic)
+        test_row.addWidget(self._test_mic_btn)
+        self._test_mic_status = QLabel("")
+        self._test_mic_status.setFont(FONT_MONO_L)
+        self._test_mic_status.setStyleSheet("color: #6aaa7a;")
+        test_row.addWidget(self._test_mic_status)
+        test_row.addStretch()
+        dev.addLayout(test_row)
 
         # ── System toggles ────────────────────────────────────────────────────
         scroll_lo.addWidget(_hdivider(C_GRID, margin=16))
@@ -782,6 +795,44 @@ class SettingsWindow(QMainWindow):
                 QTimer.singleShot(0, lambda: self._calib_status.setText("CALIBRATED"))
 
         self.engine.start_calibration(duration_s=3.0, done_cb=_done)
+
+    def _do_test_mic(self) -> None:
+        if self.config.get("wasapi_exclusive", False):
+            if self._test_mic_status:
+                self._test_mic_status.setText(
+                    "disable WASAPI exclusive mode first")
+                self._test_mic_status.setStyleSheet("color: #ffb300;")
+            return
+
+        input_dev = self.config["input_device"]
+        if self._test_mic_btn:
+            self._test_mic_btn.set_text("[ RECORDING 2 s… ]")
+        if self._test_mic_status:
+            self._test_mic_status.setText("")
+            self._test_mic_status.setStyleSheet("color: #6aaa7a;")
+
+        def _run() -> None:
+            import sounddevice as _sd
+            try:
+                data = _sd.rec(
+                    int(2.0 * 48000), samplerate=48000,
+                    channels=1, device=input_dev, dtype="float32")
+                _sd.wait()
+                _sd.play(data.flatten(), samplerate=48000)
+                _sd.wait()
+                status, color = "PLAYED BACK", "#6aaa7a"
+            except Exception as exc:
+                status, color = f"ERROR: {exc}", "#ff1744"
+            QTimer.singleShot(0, lambda s=status, c=color: self._on_test_done(s, c))
+
+        threading.Thread(target=_run, daemon=True, name="VocalClear-testmic").start()
+
+    def _on_test_done(self, status: str, color: str) -> None:
+        if self._test_mic_btn:
+            self._test_mic_btn.set_text("[ TEST MIC — 2 s ]")
+        if self._test_mic_status:
+            self._test_mic_status.setText(status)
+            self._test_mic_status.setStyleSheet(f"color: {color};")
 
     def _apply_and_restart(self) -> None:
         new_input = self._input_map.get(

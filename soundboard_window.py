@@ -513,9 +513,12 @@ class SoundBoardWindow(QMainWindow):
 
         # Action buttons row
         btn_row = QHBoxLayout(); btn_row.setContentsMargins(16, 0, 16, 10); btn_row.setSpacing(6)
-        btn_row.addWidget(_HeaderBtn("▼ IMPORT", self._do_import))
-        btn_row.addWidget(_HeaderBtn("▲ EXPORT", self._do_export))
-        btn_row.addWidget(_HeaderBtn("+ ADD",    self._add_sound))
+        btn_row.addWidget(_HeaderBtn("▼ IMPORT",   self._do_import))
+        btn_row.addWidget(_HeaderBtn("▲ EXPORT",   self._do_export))
+        btn_row.addWidget(_HeaderBtn("+ ADD",      self._add_sound))
+        btn_row.addWidget(_HeaderBtn("≈ NORMALIZE", self._do_normalize,
+                                     color=C_GREEN_LO, hot=C_GREEN_DIM,
+                                     text_idle=C_FG_DIM))
         btn_row.addStretch()
         self._stop_btn = _HeaderBtn(
             "▪ STOP ALL", self._stop_all,
@@ -744,6 +747,13 @@ class SoundBoardWindow(QMainWindow):
         for p in paths:
             threading.Thread(
                 target=lambda f=Path(p): self.sb.load_file(f), daemon=True).start()
+
+    def _do_normalize(self) -> None:
+        if not self.sb.sounds:
+            return
+        self.sb.normalize_volumes()
+        self._set_header_status("NORMALIZED")
+        self._refresh_buttons()
 
     def _do_export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
