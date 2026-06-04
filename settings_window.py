@@ -7,6 +7,7 @@ All sliders are custom-painted QWidgets matching the app palette.
 
 from __future__ import annotations
 
+import datetime
 import threading
 from pathlib import Path
 from typing import Optional, Callable, TYPE_CHECKING
@@ -25,6 +26,17 @@ from PySide6.QtWidgets import (
 from audio_engine import AudioEngine, find_vbcable_device, list_input_devices
 from config import Config
 from noise_filter import NoiseFilter
+
+_LOG = Path.home() / ".vocalclear" / "vocalclear.log"
+
+
+def _log(msg: str) -> None:
+    try:
+        _LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now():%H:%M:%S}] {msg}\n")
+    except Exception:
+        pass
 
 if TYPE_CHECKING:
     from window_snapper import SnapManager
@@ -801,8 +813,10 @@ class SettingsWindow(QMainWindow):
             try:
                 self.engine.restart()
                 status = f"ACTIVE  →  {self.engine.output_device_name}"
-            except Exception:
+                _log(f"Engine restarted  output={self.engine.output_device_name!r}")
+            except Exception as exc:
                 status = "ERR — quit and relaunch VocalClear"
+                _log(f"Engine restart failed: {exc}")
             QTimer.singleShot(0, lambda: (
                 self._apply_btn.set_text("[ APPLY & RESTART AUDIO ]") if self._apply_btn else None,
                 self._apply_status.setText(status) if self._apply_status else None,

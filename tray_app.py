@@ -12,6 +12,7 @@ Architecture changes from tkinter version:
 """
 
 import ctypes
+import datetime
 import threading
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,17 @@ from audio_engine import AudioEngine, find_vbcable_device
 from icon import draw_icon
 from soundboard import SoundBoard
 from window_snapper import SnapManager
+
+_LOG = Path.home() / ".vocalclear" / "vocalclear.log"
+
+
+def _log(msg: str) -> None:
+    try:
+        _LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now():%H:%M:%S}] {msg}\n")
+    except Exception:
+        pass
 
 
 def _pil_to_qicon(pil_img) -> QIcon:
@@ -115,10 +127,13 @@ class TrayApp:
     def _start_engine(self) -> None:
         try:
             self.engine.start()
+            _log(f"Engine started  backend={self.noise_filter.backend}"
+                 f"  output={self.engine.output_device_name!r}")
             if not self.noise_filter.is_calibrated:
                 self.engine.start_calibration(duration_s=2.0, done_cb=lambda: None)
         except Exception as e:
             self._error_msg = str(e)
+            _log(f"ENGINE ERROR: {e}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # System tray
@@ -175,6 +190,7 @@ class TrayApp:
 
     def _notify_engine_error(self) -> None:
         if self._tray and self._error_msg:
+            _log(f"Tray notification shown: ENGINE ERROR — {self._error_msg}")
             self._tray.showMessage(
                 "VocalClear — Engine Error",
                 f"Audio engine failed to start:\n{self._error_msg}\n\n"
