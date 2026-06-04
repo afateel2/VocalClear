@@ -121,26 +121,23 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `stream.latency` after start (reset to 0.0 on stop). `_InfoCard` shows a LATENCY row;  
   updated 2 s after launch and after every Settings-triggered restart.
 
-- [ ] **Mid-session device-loss watchdog**  
-  Currently if VB-CABLE resets or the mic is unplugged while the stream is running, the audio
-  callback throws and sets `last_error` silently with no recovery. Add a `QTimer`-driven watchdog
-  (every 5 s) on the main thread that checks `engine.last_error`; if newly set, attempt
-  `engine.restart()` once and notify the tray. Log the attempt and outcome.
+- [x] **Mid-session device-loss watchdog** *(done session 004)*  
+  5 s `QTimer` on main thread watches `engine.last_error`. On new error: tray warning + background  
+  restart thread. Guard flag prevents re-entry. `engine.restart()` now clears `last_error = None`  
+  on success so the watchdog doesn't re-trigger on stale state.
 
-- [ ] **PTT live indicator in main window**  
-  When PTT mode is enabled, add a small "PTT" chip next to the status chip that glows green while
-  the key is held and dims when released. Currently there is zero visual feedback that PTT is active
-  or that the key is registering. Check `engine._ptt_active` in the existing `_tick` timer.
+- [x] **PTT live indicator in main window** *(done session 004)*  
+  `_ptt_chip` QLabel in header: hidden when PTT off; "● PTT" (green fill) when key held,  
+  "○ PTT" (dim border) when enabled but key up. Updated every `_tick`.
 
 - [ ] **Soundboard: per-sound loop toggle**  
   Add "Loop" to the right-click context menu. A looping sound repeats from the start when it ends
   (`_PlayingInstance` needs a `loop: bool` flag; `get_mix_frame` restarts `pos` instead of marking done).
   Show a loop indicator (↺) on the button tile when active.
 
-- [ ] **Soundboard: search / filter bar**  
-  Add a small text input above the grid. As the user types, hide buttons whose names don't match.
-  No new data model needed — just iterate `self._btns` and call `btn.setVisible(match)`.
-  Clear filter on Escape. Useful once the soundboard grows past ~12 sounds.
+- [x] **Soundboard: search / filter bar** *(done session 004)*  
+  `QLineEdit` row between controls and grid; `_apply_search_filter()` hides non-matching  
+  buttons. Called on text change and at end of `_refresh_buttons`. Escape clears filter.
 
 - [ ] **Centralize dialog stylesheets**  
   The same `QMessageBox` dark-theme CSS block is copy-pasted in `main_window.py`,
@@ -152,14 +149,44 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   this field, it's schema 0 — run any needed migrations before updating. Currently migrations
   are ad-hoc (`block_size > 480 → reset`). A version field makes future migrations systematic.
 
-- [ ] **Tray tooltip: show live input dB**  
-  Update the tray tooltip every 5 s (via the keepalive timer that `QSystemTrayIcon` needs anyway)
-  to include the current input level: "VocalClear – Active → CABLE Input  |  −18 dB".
-  Gives at-a-glance confirmation the mic is active without opening the main window.
+- [x] **Tray tooltip: live input dB** *(done session 004)*  
+  `_tooltip()` now appends the current input dB (e.g. "| −18 dB"); called by the watchdog  
+  timer every 5 s so the tooltip stays fresh without a separate timer.
 
 ---
 
 ## Session Log
+
+---
+
+### Session 004 — 2026-06-04 (autonomous loop tick 3)
+
+**Goal:** Device-loss watchdog, PTT live indicator, soundboard search bar, live dB in tray tooltip.
+
+**Done:**
+- Device-loss watchdog: 5 s `QTimer` on main thread; new `engine.last_error` triggers background  
+  restart with tray notifications for success/failure. `_watchdog_restart_active` guard prevents  
+  concurrent restarts. `engine.restart()` now clears `last_error = None` on success.
+- PTT chip: `_ptt_chip` QLabel in header row; hidden when PTT disabled, "● PTT" green-fill  
+  when key held, "○ PTT" dim-border when enabled but released. Polled each `_tick`.
+- Soundboard search: `QLineEdit` row with FILTER label; `_apply_search_filter()` hides  
+  non-matching buttons, re-applied at end of `_refresh_buttons`. Escape clears. Placeholder  
+  visibility unaffected by filter (only depends on whether any sounds are loaded).
+- Tray tooltip live dB: `_tooltip()` appends current `input_rms` as dB string; watchdog  
+  calls `setToolTip(self._tooltip())` every 5 s.
+
+**Problems:**
+- `_ptt_chip` reads `engine._ptt_active` (private attr). Acceptable since it's within the same  
+  package and the attr is a simple `bool` written atomically by the PTT thread.
+
+**Research / Key Facts:**
+- `QTimer.singleShot(0, fn)` from a background thread safely queues onto the Qt event loop  
+  (this is documented Qt behaviour). Used throughout the watchdog restart callbacks.
+- `threading.Thread(..., daemon=True)` is critical for the watchdog restart thread: if the  
+  app quits while a restart is in progress, the thread dies with the process rather than blocking.
+
+**Next session should do:** Config schema version, centralize dialog stylesheets, soundboard  
+per-sound loop toggle, "test mic" button in settings.
 
 ---
 

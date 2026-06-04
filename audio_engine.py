@@ -220,6 +220,7 @@ class AudioEngine:
             time.sleep(1.0 + attempt)
             try:
                 self.start()
+                self.last_error = None  # clear after successful restart
                 return
             except Exception as e:
                 self.last_error = str(e)

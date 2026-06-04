@@ -608,6 +608,7 @@ class MainWindow(QMainWindow):
         self._history:    Optional[_HistoryGraph]  = None
         self._info_card:  Optional[_InfoCard]      = None
         self._status_chip:Optional[_StatusChip]    = None
+        self._ptt_chip:   Optional[QLabel]         = None
         self._toggle_btn: Optional[_IconButton]    = None
         self._db_lbl:     Optional[QLabel]         = None
         self._clip_lbl:   Optional[QLabel]         = None
@@ -691,10 +692,18 @@ class MainWindow(QMainWindow):
         self._status_chip = _StatusChip()
         self._status_chip.set_active(self.noise_filter.enabled)
 
+        self._ptt_chip = QLabel("PTT")
+        self._ptt_chip.setFont(FONT_MONO_S)
+        self._ptt_chip.setContentsMargins(6, 2, 6, 2)
+        self._ptt_chip.setStyleSheet(
+            "color: #3a6642; background: #0b160b; border: 1px solid #004d28; padding: 2px 6px;")
+        self._ptt_chip.hide()
+
         hdr_lo.addWidget(lbl_title)
         hdr_lo.addWidget(lbl_clear)
         hdr_lo.addWidget(lbl_sub)
         hdr_lo.addStretch()
+        hdr_lo.addWidget(self._ptt_chip)
         hdr_lo.addWidget(self._status_chip)
         root.addWidget(hdr)
         root.addWidget(_hdivider(C_GREEN_LO))
@@ -889,6 +898,24 @@ class MainWindow(QMainWindow):
         active  = self.noise_filter.enabled
         in_rms  = getattr(self.engine, "input_rms",  0.0)
         out_rms = getattr(self.engine, "output_rms", 0.0)
+
+        if self._ptt_chip:
+            ptt_on  = self.config.get("ptt_enabled", False)
+            ptt_live = getattr(self.engine, "_ptt_active", True)
+            if ptt_on:
+                self._ptt_chip.show()
+                if ptt_live:
+                    self._ptt_chip.setText("● PTT")
+                    self._ptt_chip.setStyleSheet(
+                        "color: #030603; background: #00e676; padding: 2px 6px;")
+                else:
+                    self._ptt_chip.setText("○ PTT")
+                    self._ptt_chip.setStyleSheet(
+                        "color: #3a6642; background: #0b160b; "
+                        "border: 1px solid #004d28; padding: 2px 6px;")
+            else:
+                self._ptt_chip.hide()
+
         if self._vu_meter:
             self._vu_meter.set_paused(not active)
             self._vu_meter.update_levels(in_rms, out_rms)

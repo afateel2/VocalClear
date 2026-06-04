@@ -58,10 +58,12 @@ class TrayApp:
 
         self.engine = AudioEngine(self.config, self.noise_filter)
 
-        self._active:       bool          = self.config["enabled"]
-        self._error_msg:    Optional[str] = None
-        self._prev_crashed: bool          = prev_crashed
-        self._vbc_missing:  bool          = False
+        self._active:            bool          = self.config["enabled"]
+        self._error_msg:         Optional[str] = None
+        self._prev_crashed:      bool          = prev_crashed
+        self._vbc_missing:       bool          = False
+        self._watched_error:     Optional[str] = None
+        self._watchdog_restart_active: bool    = False
 
         # Check VB-CABLE on startup
         self._vbc_index = find_vbcable_device()
@@ -104,6 +106,7 @@ class TrayApp:
             app.setWindowIcon(_pil_to_qicon(draw_icon(64, active=True)))
 
         self._start_engine()
+        self._watched_error = self.engine.last_error  # baseline so watchdog ignores startup state
         self._build_tray(app)
 
         # Build all windows up-front (cheap — they start hidden)
@@ -120,8 +123,13 @@ class TrayApp:
         elif self._prev_crashed:
             QTimer.singleShot(2000, self._notify_prev_crash)
 
+        watchdog = QTimer()
+        watchdog.timeout.connect(self._watchdog_tick)
+        watchdog.start(5000)
+
         app.exec()
 
+        watchdog.stop()
         # ── Cleanup after exec() returns ──────────────────────────────────────
         self._soundboard.stop_watcher()
         self.engine.stop()
@@ -306,12 +314,81 @@ class TrayApp:
             QApplication.instance().quit()
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Watchdog — runs on the Qt main thread every 5 s
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _watchdog_tick(self) -> None:
+        # Update tray tooltip with live input dB
+        if self._tray:
+            self._tray.setToolTip(self._tooltip())
+
+        if self._watchdog_restart_active:
+            return
+        cur_error = self.engine.last_error
+        if cur_error and cur_error != self._watched_error:
+            self._watched_error = cur_error
+            _log(f"Watchdog detected runtime engine error: {cur_error}")
+            self._watchdog_restart_active = True
+            if self._tray:
+                self._tray.showMessage(
+                    "VocalClear",
+                    "Audio stream error — attempting automatic restart…",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    3000,
+                )
+            threading.Thread(
+                target=self._watchdog_restart,
+                daemon=True,
+                name="VocalClear-watchdog",
+            ).start()
+
+    def _watchdog_restart(self) -> None:
+        try:
+            self.engine.restart()
+            _log(f"Watchdog restart succeeded → {self.engine.output_device_name}")
+            QTimer.singleShot(0, self._on_watchdog_success)
+        except Exception as exc:
+            _log(f"Watchdog restart failed: {exc}")
+            self._watched_error = str(exc)   # prevent immediate re-trigger
+            QTimer.singleShot(0, lambda e=str(exc): self._on_watchdog_failure(e))
+        finally:
+            self._watchdog_restart_active = False
+
+    def _on_watchdog_success(self) -> None:
+        self._watched_error = None
+        self._refresh_tray()
+        if self._main_window:
+            self._main_window.refresh_output_device()
+        if self._tray:
+            self._tray.showMessage(
+                "VocalClear",
+                f"Stream reconnected → {self.engine.output_device_name}",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+
+    def _on_watchdog_failure(self, err: str) -> None:
+        if self._tray:
+            self._tray.showMessage(
+                "VocalClear — Stream Error",
+                f"Auto-restart failed.\nOpen Settings → Apply & Restart Audio.\n\n{err}",
+                QSystemTrayIcon.MessageIcon.Critical,
+                6000,
+            )
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Helpers
     # ──────────────────────────────────────────────────────────────────────────
 
     def _tooltip(self) -> str:
+        import math as _math
         state = "Active" if self._active else "Paused"
         if self._error_msg:
             return f"VocalClear – ERROR: {self._error_msg}"
         vbc = f" → {self.engine.output_device_name}" if self.engine.output_device_name else ""
-        return f"VocalClear – {state}{vbc}"
+        rms = self.engine.input_rms
+        db_str = ""
+        if rms > 1e-9:
+            db = max(-60.0, 20 * _math.log10(rms))
+            db_str = f"  |  {db:+.0f} dB"
+        return f"VocalClear – {state}{vbc}{db_str}"

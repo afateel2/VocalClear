@@ -440,9 +440,10 @@ class SoundBoardWindow(QMainWindow):
         self._snapper  = snapper
         self._btns:    dict[str, _SoundButton] = {}
         self._refresh_pending = threading.Event()
-        self._status_lbl:     Optional[QLabel] = None
-        self._header_status:  Optional[QLabel] = None
-        self._placeholder:    Optional[QLabel] = None
+        self._status_lbl:     Optional[QLabel]     = None
+        self._header_status:  Optional[QLabel]     = None
+        self._placeholder:    Optional[QLabel]     = None
+        self._search_box:     Optional[QLineEdit]  = None
 
         self.setWindowTitle("SoundBoard  —  VocalClear")
         self.setFixedSize(W, H)
@@ -546,6 +547,42 @@ class SoundBoardWindow(QMainWindow):
         root.addWidget(ctrl)
         root.addWidget(_hdivider(QColor("#0d1f0d")))
 
+        # ── Search / filter bar ───────────────────────────────────────────────
+        search_outer = QWidget()
+        search_outer.setAutoFillBackground(True)
+        pal = search_outer.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor("#050d05"))
+        search_outer.setPalette(pal)
+        s_lo = QHBoxLayout(search_outer)
+        s_lo.setContentsMargins(14, 5, 14, 5)
+        s_lo.setSpacing(6)
+
+        filter_lbl = QLabel("FILTER")
+        filter_lbl.setFont(FONT_MONO_S)
+        filter_lbl.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        s_lo.addWidget(filter_lbl)
+
+        self._search_box = QLineEdit()
+        self._search_box.setPlaceholderText("type to filter…  Esc to clear")
+        self._search_box.setFixedHeight(22)
+        self._search_box.setStyleSheet(
+            "QLineEdit {"
+            "  background: #0a180a;"
+            "  color: #c8ffd4;"
+            "  border: 1px solid #003d1f;"
+            "  padding: 1px 6px;"
+            "  font-family: Consolas;"
+            "  font-size: 8pt;"
+            "}"
+            "QLineEdit:focus { border-color: #00e676; }"
+            "QLineEdit::placeholder { color: #1a3f1a; }"
+        )
+        self._search_box.textChanged.connect(self._on_search)
+        s_lo.addWidget(self._search_box, stretch=1)
+
+        root.addWidget(search_outer)
+        root.addWidget(_hdivider(QColor("#0a1a0a")))
+
         # ── Scrollable button grid ─────────────────────────────────────────────
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -648,6 +685,8 @@ class SoundBoardWindow(QMainWindow):
         np = len(playing)
         self._playing_lbl.setText(
             f"● {np} playing" if np else "")
+
+        self._apply_search_filter()
 
     # ── Context menu ──────────────────────────────────────────────────────────
 
@@ -796,6 +835,27 @@ class SoundBoardWindow(QMainWindow):
         self.sb.master_volume = v
         self._sfx_pct.setText(f"{int(v * 100)}%")
         self.sb._save_sounds_config()
+
+    # ── Search ────────────────────────────────────────────────────────────────
+
+    def _on_search(self, text: str) -> None:
+        self._apply_search_filter()
+
+    def _apply_search_filter(self) -> None:
+        if not self._search_box:
+            return
+        q = self._search_box.text().strip().lower()
+        for name, btn in self._btns.items():
+            btn.setVisible(not q or q in name.lower())
+        if self._placeholder:
+            self._placeholder.setVisible(not self._btns)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._search_box:
+            if self._search_box.text():
+                self._search_box.clear()
+                return
+        super().keyPressEvent(event)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
