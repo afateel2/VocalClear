@@ -94,6 +94,7 @@ class AudioEngine:
         self.input_latency_ms:   float         = 0.0
         self.output_latency_ms:  float         = 0.0
         self.process_time_ms:    float         = 0.0   # rolling avg of filter CPU time
+        self._out_channels:      int           = 2     # actual output channel count
 
         # SoundBoard (optional — attach after construction)
         self._soundboard: Optional[SoundBoard] = None
@@ -124,11 +125,17 @@ class AudioEngine:
 
         if output_dev is not None:
             try:
-                self.output_device_name = sd.query_devices(output_dev)["name"]
+                dev_info = sd.query_devices(output_dev)
+                self.output_device_name = dev_info["name"]
+                # Use actual device channel count (VB-CABLE is always stereo).
+                # Capped at 2 — we always produce mono internally and duplicate.
+                self._out_channels = max(1, min(2, int(dev_info["max_output_channels"])))
             except Exception:
                 self.output_device_name = str(output_dev)
+                self._out_channels = 2
         else:
             self.output_device_name = "System default"
+            self._out_channels = 2
 
         # Match sample rate to output device
         sr = 48000
@@ -177,7 +184,7 @@ class AudioEngine:
             samplerate   = sr,
             blocksize    = bs,
             dtype        = "float32",
-            channels     = 1,
+            channels     = (1, self._out_channels),   # mono in, device-native out
             device       = (input_dev, output_dev),
             callback     = self._stream_callback,
             latency      = 0.005,
@@ -292,13 +299,13 @@ class AudioEngine:
                 mic_frame = processed.flatten() if self._ptt_active else np.zeros(frames, np.float32)
                 mixed = self._mix_soundboard(mic_frame, frames)
                 mixed = self._apply_gain(mixed)
-                outdata[:] = mixed.reshape(-1, 1)
+                outdata[:] = self._to_out(mixed)
                 self.output_rms = float(np.sqrt(np.mean(mixed ** 2)))
             except queue.Empty:
                 # No mic yet — still mix soundboard so SFX come through
                 sb_only = self._mix_soundboard(np.zeros(frames, np.float32), frames)
                 sb_only = self._apply_gain(sb_only)
-                outdata[:] = sb_only.reshape(-1, 1)
+                outdata[:] = self._to_out(sb_only)
                 self.output_rms = float(np.sqrt(np.mean(sb_only ** 2)))
             return
 
@@ -312,11 +319,11 @@ class AudioEngine:
                 processed = np.zeros_like(processed)
             mixed     = self._mix_soundboard(processed, frames)
             mixed     = self._apply_gain(mixed)
-            outdata[:] = mixed.reshape(-1, 1).astype(np.float32)
+            outdata[:] = self._to_out(mixed)
             self.output_rms = float(np.sqrt(np.mean(mixed ** 2)))
         except Exception as exc:
             self.last_error = str(exc)
-            outdata[:] = indata
+            outdata[:] = self._to_out(mono)
             self.output_rms = self.input_rms
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -338,6 +345,13 @@ class AudioEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Soundboard mixing helper
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _to_out(self, mono: np.ndarray) -> np.ndarray:
+        """Shape a mono float32 array into (frames, _out_channels) for outdata."""
+        mono = mono.astype(np.float32)
+        if self._out_channels == 1:
+            return mono.reshape(-1, 1)
+        return np.column_stack([mono, mono])
 
     def _mix_soundboard(self, mic: np.ndarray, n: int) -> np.ndarray:
         """Add soundboard frame to mic audio. Returns float32 mono array."""
