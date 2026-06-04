@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon, QPixmap, QImage, QAction
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PySide6.QtGui import QIcon, QPixmap, QImage, QAction, QFont, QGuiApplication
+from PySide6.QtWidgets import (
+    QApplication, QSystemTrayIcon, QMenu, QWidget, QLabel, QVBoxLayout)
 
 from config import Config
 from noise_filter import NoiseFilter
@@ -49,6 +50,53 @@ def _pil_to_qicon(pil_img) -> QIcon:
     return QIcon(QPixmap.fromImage(qimg))
 
 
+class _ToastOverlay(QWidget):
+    """Brief always-on-top state badge shown in the bottom-right corner when the
+    global toggle hotkey fires. Disappears after 2 seconds without stealing focus."""
+
+    def __init__(self):
+        super().__init__(
+            None,
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        self._lbl = QLabel()
+        self._lbl.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        self._lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lo = QVBoxLayout(self)
+        lo.setContentsMargins(18, 10, 18, 10)
+        lo.addWidget(self._lbl)
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self.hide)
+
+    def flash(self, active: bool) -> None:
+        if active:
+            self._lbl.setText("● MIC ACTIVE")
+            self._lbl.setStyleSheet("color: #00e676;")
+            self.setStyleSheet(
+                "background: #0b160b; border: 1px solid #007a40; border-radius: 4px;")
+        else:
+            self._lbl.setText("⊘ MIC MUTED")
+            self._lbl.setStyleSheet("color: #ff1744;")
+            self.setStyleSheet(
+                "background: #160505; border: 1px solid #7a0010; border-radius: 4px;")
+        self.adjustSize()
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            rect = screen.availableGeometry()
+            self.move(rect.right()  - self.width()  - 24,
+                      rect.bottom() - self.height() - 48)
+        self.show()
+        self._hide_timer.start(2000)
+
+
 class TrayApp:
     def __init__(self, prev_crashed: bool = False):
         self.config       = Config()
@@ -58,12 +106,14 @@ class TrayApp:
 
         self.engine = AudioEngine(self.config, self.noise_filter)
 
-        self._active:            bool          = self.config["enabled"]
-        self._error_msg:         Optional[str] = None
-        self._prev_crashed:      bool          = prev_crashed
-        self._vbc_missing:       bool          = False
-        self._watched_error:     Optional[str] = None
-        self._watchdog_restart_active: bool    = False
+        self._active:                  bool                   = self.config["enabled"]
+        self._error_msg:               Optional[str]          = None
+        self._prev_crashed:            bool                   = prev_crashed
+        self._vbc_missing:             bool                   = False
+        self._watched_error:           Optional[str]          = None
+        self._watchdog_restart_active: bool                   = False
+        self._toggle_hotkey_was_down:  bool                   = False
+        self._toast:                   Optional[_ToastOverlay] = None
 
         # Check VB-CABLE on startup
         self._vbc_index = find_vbcable_device()
@@ -112,6 +162,9 @@ class TrayApp:
         # Build all windows up-front (cheap — they start hidden)
         self._build_windows()
 
+        # Screen-corner state overlay for the global toggle hotkey
+        self._toast = _ToastOverlay()
+
         # Show main window on launch
         self._main_window.show()
 
@@ -127,9 +180,15 @@ class TrayApp:
         watchdog.timeout.connect(self._watchdog_tick)
         watchdog.start(5000)
 
+        # R-CTRL + \ global toggle hotkey — polled on the Qt main thread
+        hotkey_timer = QTimer()
+        hotkey_timer.timeout.connect(self._check_toggle_hotkey)
+        hotkey_timer.start(30)
+
         app.exec()
 
         watchdog.stop()
+        hotkey_timer.stop()
         # ── Cleanup after exec() returns ──────────────────────────────────────
         self._soundboard.stop_watcher()
         self.engine.stop()
@@ -375,6 +434,40 @@ class TrayApp:
                 QSystemTrayIcon.MessageIcon.Critical,
                 6000,
             )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Global toggle hotkey — R-CTRL + \ (polled every 30 ms on the Qt main thread)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _check_toggle_hotkey(self) -> None:
+        r_ctrl    = bool(ctypes.windll.user32.GetAsyncKeyState(0xA3) & 0x8000)  # VK_RCONTROL
+        backslash = bool(ctypes.windll.user32.GetAsyncKeyState(0xDC) & 0x8000)  # VK_OEM_5 (US \)
+        down = r_ctrl and backslash
+        if down and not self._toggle_hotkey_was_down:
+            self._do_toggle()
+            self._show_toggle_feedback()
+        self._toggle_hotkey_was_down = down
+
+    def _show_toggle_feedback(self) -> None:
+        if self._toast:
+            self._toast.flash(self._active)
+        self._play_toggle_sound(self._active)
+
+    def _play_toggle_sound(self, active: bool) -> None:
+        def _play():
+            try:
+                import sounddevice as _sd, numpy as _np
+                sr   = 44100
+                freq = 880.0 if active else 587.0
+                dur  = 0.12
+                t    = _np.linspace(0, dur, int(sr * dur), endpoint=False)
+                env  = _np.linspace(1.0, 0.0, int(sr * dur))
+                wave = (0.25 * _np.sin(2 * _np.pi * freq * t) * env).astype(_np.float32)
+                _sd.play(wave, samplerate=sr)
+                _sd.wait()
+            except Exception:
+                pass
+        threading.Thread(target=_play, daemon=True, name="VocalClear-tone").start()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Helpers
