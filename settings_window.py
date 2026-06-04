@@ -858,24 +858,45 @@ class SettingsWindow(QMainWindow):
         self._orig_input_dev = new_input
         self._orig_excl_mode = new_excl
 
-        if self._apply_btn: self._apply_btn.set_text("RESTARTING…")
+        if self._apply_btn:
+            self._apply_btn.set_text("RESTARTING…")
+            self._apply_btn.setEnabled(False)
+        if self._apply_status:
+            self._apply_status.setText("")
 
         def _restart():
             try:
                 self.engine.restart()
-                status = f"ACTIVE  →  {self.engine.output_device_name}"
+                success = True
+                status  = f"✔  ACTIVE  →  {self.engine.output_device_name}"
                 _log(f"Engine restarted  output={self.engine.output_device_name!r}")
             except Exception as exc:
-                status = "ERR — quit and relaunch VocalClear"
+                success = False
+                status  = f"✘  ERROR: {exc}"
                 _log(f"Engine restart failed: {exc}")
-            QTimer.singleShot(0, lambda: (
-                self._apply_btn.set_text("[ APPLY & RESTART AUDIO ]") if self._apply_btn else None,
-                self._apply_status.setText(status) if self._apply_status else None,
-                self._refresh_status(),
-                self._check_dirty(),
-            ))
+            # QTimer.singleShot with self as context guarantees delivery on the
+            # Qt main thread even though _restart runs in a plain Python thread.
+            QTimer.singleShot(0, self, lambda s=status, ok=success: self._on_restart_done(s, ok))
 
-        threading.Thread(target=_restart, daemon=True).start()
+        threading.Thread(target=_restart, daemon=True, name="VocalClear-restart").start()
+
+    def _on_restart_done(self, status: str, success: bool) -> None:
+        if self._apply_btn:
+            self._apply_btn.set_text("[ APPLY & RESTART AUDIO ]")
+            self._apply_btn.setEnabled(True)
+        if self._apply_status:
+            color = "#6aaa7a" if success else "#ff1744"
+            self._apply_status.setStyleSheet(f"color: {color};")
+            self._apply_status.setText(status)
+            if success:
+                # Auto-clear the success message after 4 s
+                QTimer.singleShot(4000, self,
+                    lambda: self._apply_status.setText("") if self._apply_status else None)
+        self._refresh_status()
+        self._check_dirty()
+        if success and self._on_close_cb:
+            # Sync tray icon, tooltip, and main window output device label
+            self._on_close_cb()
 
     # ── Window events ─────────────────────────────────────────────────────────
 
