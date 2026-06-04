@@ -107,6 +107,7 @@ class TrayApp:
         self.engine = AudioEngine(self.config, self.noise_filter)
 
         self._active:                  bool                   = self.config["enabled"]
+        self._muted:                   bool                   = False
         self._error_msg:               Optional[str]          = None
         self._prev_crashed:            bool                   = prev_crashed
         self._vbc_missing:             bool                   = False
@@ -231,20 +232,25 @@ class TrayApp:
             "QMenu::item:selected { background: #007a40; color: #030603; }"
             "QMenu::separator { height: 1px; background: #007a40; margin: 2px 0; }"
         )
-        show_act   = QAction("⊞  Show Window", menu)
-        toggle_act = QAction(
-            ("⏸  Pause" if self._active else "▶  Resume"), menu)
-        settings_act = QAction("⚙  Settings",    menu)
-        sb_act       = QAction("🎛  Soundboard",  menu)
+        show_act     = QAction("⊞  Show Window", menu)
+        mute_act     = QAction(
+            ("●  Unmute mic  (R-Ctrl+\\)" if self._muted else "⊘  Mute mic  (R-Ctrl+\\)"), menu)
+        toggle_act   = QAction(
+            ("⏸  Pause filter (passthrough)" if self._active else "▶  Resume filter"), menu)
+        settings_act = QAction("⚙  Settings",       menu)
+        sb_act       = QAction("🎛  Soundboard",     menu)
         quit_act     = QAction("✖  Quit VocalClear", menu)
 
         show_act.triggered.connect(self._show_main_window)
+        mute_act.triggered.connect(self._do_mute_toggle)
         toggle_act.triggered.connect(self._do_toggle)
         settings_act.triggered.connect(self._open_settings)
         sb_act.triggered.connect(self._open_soundboard)
         quit_act.triggered.connect(self._do_quit)
 
         menu.addAction(show_act)
+        menu.addSeparator()
+        menu.addAction(mute_act)
         menu.addAction(toggle_act)
         menu.addAction(settings_act)
         menu.addAction(sb_act)
@@ -310,6 +316,7 @@ class TrayApp:
             engine        = self.engine,
             soundboard    = self._soundboard,
             on_toggle     = self._do_toggle,
+            on_mute       = self._do_mute_toggle,
             on_settings   = self._open_settings,
             on_soundboard = self._open_soundboard,
             on_quit       = self._do_quit,
@@ -333,6 +340,13 @@ class TrayApp:
         self._refresh_tray()
         if self._main_window:
             self._main_window.refresh_status()
+
+    def _do_mute_toggle(self) -> None:
+        self._muted             = not self._muted
+        self.engine.muted       = self._muted
+        self._refresh_tray()
+        if self._main_window:
+            self._main_window.refresh_mute_state(self._muted)
 
     def _open_settings(self) -> None:
         if self._settings_window is None:
@@ -444,14 +458,15 @@ class TrayApp:
         backslash = bool(ctypes.windll.user32.GetAsyncKeyState(0xDC) & 0x8000)  # VK_OEM_5 (US \)
         down = r_ctrl and backslash
         if down and not self._toggle_hotkey_was_down:
-            self._do_toggle()
+            self._do_mute_toggle()
             self._show_toggle_feedback()
         self._toggle_hotkey_was_down = down
 
     def _show_toggle_feedback(self) -> None:
+        # Feedback reflects mute state: unmuted = active, muted = muted
         if self._toast:
-            self._toast.flash(self._active)
-        self._play_toggle_sound(self._active)
+            self._toast.flash(not self._muted)
+        self._play_toggle_sound(not self._muted)
 
     def _play_toggle_sound(self, active: bool) -> None:
         def _play():
@@ -475,9 +490,14 @@ class TrayApp:
 
     def _tooltip(self) -> str:
         import math as _math
-        state = "Active" if self._active else "Paused"
         if self._error_msg:
             return f"VocalClear – ERROR: {self._error_msg}"
+        if self._muted:
+            state = "Muted"
+        elif not self._active:
+            state = "Passthrough"
+        else:
+            state = "Active"
         vbc = f" → {self.engine.output_device_name}" if self.engine.output_device_name else ""
         rms = self.engine.input_rms
         db_str = ""

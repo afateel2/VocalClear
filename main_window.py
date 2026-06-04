@@ -605,6 +605,7 @@ class MainWindow(QMainWindow):
         engine:         "AudioEngine",
         soundboard:     "SoundBoard",
         on_toggle:      Callable,
+        on_mute:        Callable,
         on_settings:    Callable,
         on_soundboard:  Callable,
         on_quit:        Callable,
@@ -616,6 +617,7 @@ class MainWindow(QMainWindow):
         self.engine         = engine
         self.soundboard     = soundboard
         self._on_toggle     = on_toggle
+        self._on_mute       = on_mute
         self._on_settings   = on_settings
         self._on_soundboard = on_soundboard
         self._on_quit       = on_quit
@@ -626,6 +628,7 @@ class MainWindow(QMainWindow):
         self._info_card:  Optional[_InfoCard]      = None
         self._status_chip:Optional[_StatusChip]    = None
         self._ptt_chip:   Optional[QLabel]         = None
+        self._mute_chip:  Optional[QLabel]         = None
         self._toggle_btn: Optional[_IconButton]    = None
         self._db_lbl:     Optional[QLabel]         = None
         self._clip_lbl:   Optional[QLabel]         = None
@@ -663,6 +666,13 @@ class MainWindow(QMainWindow):
 
     def refresh_status(self) -> None:
         QTimer.singleShot(0, self._update_status)
+
+    def refresh_mute_state(self, muted: bool) -> None:
+        if self._mute_chip:
+            if muted:
+                self._mute_chip.show()
+            else:
+                self._mute_chip.hide()
 
     def refresh_output_device(self) -> None:
         QTimer.singleShot(0, self._do_refresh_output)
@@ -718,10 +728,20 @@ class MainWindow(QMainWindow):
             "color: #3a6642; background: #0b160b; border: 1px solid #004d28; padding: 2px 6px;")
         self._ptt_chip.hide()
 
+        self._mute_chip = QLabel("⊘ MUTED")
+        self._mute_chip.setFont(FONT_MONO_S)
+        self._mute_chip.setContentsMargins(6, 2, 6, 2)
+        self._mute_chip.setStyleSheet(
+            "color: #ff1744; background: #160505; border: 1px solid #7a0010; padding: 2px 6px;")
+        self._mute_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mute_chip.mousePressEvent = lambda _e: self._on_mute()
+        self._mute_chip.hide()
+
         hdr_lo.addWidget(lbl_title)
         hdr_lo.addWidget(lbl_clear)
         hdr_lo.addWidget(lbl_sub)
         hdr_lo.addStretch()
+        hdr_lo.addWidget(self._mute_chip)
         hdr_lo.addWidget(self._ptt_chip)
         hdr_lo.addWidget(self._status_chip)
         root.addWidget(hdr)

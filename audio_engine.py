@@ -99,6 +99,11 @@ class AudioEngine:
         # SoundBoard (optional — attach after construction)
         self._soundboard: Optional[SoundBoard] = None
 
+        # Mute — when True, mic output is silenced before soundboard mix.
+        # Independent of noise_filter.enabled (pause/passthrough).
+        # Soundboard sounds still pass through so Discord SFX keeps working.
+        self.muted: bool = False
+
         # Push-to-talk — polled every 10 ms by a background thread
         # True means "mic is open" (either PTT disabled, or key held down)
         self._ptt_active: bool = True
@@ -296,7 +301,9 @@ class AudioEngine:
                 pass
             try:
                 processed = self._output_q.get_nowait()
-                mic_frame = processed.flatten() if self._ptt_active else np.zeros(frames, np.float32)
+                mic_frame = (processed.flatten()
+                             if (self._ptt_active and not self.muted)
+                             else np.zeros(frames, np.float32))
                 mixed = self._mix_soundboard(mic_frame, frames)
                 mixed = self._apply_gain(mixed)
                 outdata[:] = self._to_out(mixed)
@@ -315,7 +322,7 @@ class AudioEngine:
             processed = self.noise_filter.process(mono)
             self.process_time_ms = (
                 self.process_time_ms * 0.9 + (time.perf_counter() - _t0) * 1000 * 0.1)
-            if not self._ptt_active:
+            if not self._ptt_active or self.muted:
                 processed = np.zeros_like(processed)
             mixed     = self._mix_soundboard(processed, frames)
             mixed     = self._apply_gain(mixed)
