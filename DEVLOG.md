@@ -107,6 +107,66 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   Record 2 seconds through the selected input device and play back through monitor so the user can
   verify the mic is working without leaving the app.
 
+- [ ] **Log rotation**  
+  `vocalclear.log` grows forever. At startup, if the file exceeds 500 KB trim it to the last 200 lines.
+  This keeps the file readable without manual cleanup and prevents disk bloat on long-running installs.
+
+- [ ] **Crash detection on next launch**  
+  If the previous session has no "exited cleanly" line (i.e., the last line is "VocalClear starting"),
+  show a one-time tray notification: "Last session ended unexpectedly — see log for details."
+  Implemented in `main.py` by reading the tail of the log before writing the new start entry.
+
+- [ ] **Startup health-check dialog**  
+  On first launch (or when VB-CABLE is missing), show a guided one-time setup notice:
+  "VB-CABLE not found — noise suppression is inactive. Install from vb-audio.com then restart."
+  Currently the warning only appears buried in Settings. A modal on first bad start is much clearer.
+
+- [ ] **Audio clipping warning in VU meter**  
+  If `output_rms` stays above 0.92 for 3+ consecutive ticks, flash the OUT channel red and show
+  "CLIP" in the dB readout. Clipping before VB-CABLE means Discord hears distortion.
+  Clear automatically after 2 seconds of non-clipping output.
+
+- [ ] **Show actual stream latency in main window**  
+  `sounddevice.Stream.latency` returns the measured `(input_latency, output_latency)` tuple after
+  the stream opens. Expose this on `AudioEngine` and display it in the main window info card
+  (e.g., "LATENCY  4.2 ms in / 8.1 ms out") replacing the estimated value shown in settings.
+
+- [ ] **Mid-session device-loss watchdog**  
+  Currently if VB-CABLE resets or the mic is unplugged while the stream is running, the audio
+  callback throws and sets `last_error` silently with no recovery. Add a `QTimer`-driven watchdog
+  (every 5 s) on the main thread that checks `engine.last_error`; if newly set, attempt
+  `engine.restart()` once and notify the tray. Log the attempt and outcome.
+
+- [ ] **PTT live indicator in main window**  
+  When PTT mode is enabled, add a small "PTT" chip next to the status chip that glows green while
+  the key is held and dims when released. Currently there is zero visual feedback that PTT is active
+  or that the key is registering. Check `engine._ptt_active` in the existing `_tick` timer.
+
+- [ ] **Soundboard: per-sound loop toggle**  
+  Add "Loop" to the right-click context menu. A looping sound repeats from the start when it ends
+  (`_PlayingInstance` needs a `loop: bool` flag; `get_mix_frame` restarts `pos` instead of marking done).
+  Show a loop indicator (↺) on the button tile when active.
+
+- [ ] **Soundboard: search / filter bar**  
+  Add a small text input above the grid. As the user types, hide buttons whose names don't match.
+  No new data model needed — just iterate `self._btns` and call `btn.setVisible(match)`.
+  Clear filter on Escape. Useful once the soundboard grows past ~12 sounds.
+
+- [ ] **Centralize dialog stylesheets**  
+  The same `QMessageBox` dark-theme CSS block is copy-pasted in `main_window.py`,
+  `soundboard_window.py`, and `tray_app.py`. Extract to a single `_style_dialog(mb)` helper
+  in a shared `ui_utils.py` module. Reduces drift if the palette ever changes.
+
+- [ ] **Config schema version**  
+  Add `"schema": 1` to the saved JSON. When `config.py:load()` reads an older config without
+  this field, it's schema 0 — run any needed migrations before updating. Currently migrations
+  are ad-hoc (`block_size > 480 → reset`). A version field makes future migrations systematic.
+
+- [ ] **Tray tooltip: show live input dB**  
+  Update the tray tooltip every 5 s (via the keepalive timer that `QSystemTrayIcon` needs anyway)
+  to include the current input level: "VocalClear – Active → CABLE Input  |  −18 dB".
+  Gives at-a-glance confirmation the mic is active without opening the main window.
+
 ---
 
 ## Session Log
