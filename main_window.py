@@ -162,9 +162,16 @@ class _IconButton(QWidget):
     def set_text(self, text: str) -> None:
         self._text = text
         self.update()
+        self.updateGeometry()
 
     def set_icon(self, icon: str) -> None:
         self._icon = icon
+        self.update()
+
+    def set_colors(self, base: QColor, hot: QColor, idle_text: QColor) -> None:
+        self._base      = base
+        self._hot       = hot
+        self._idle_text = idle_text
         self.update()
 
     def sizeHint(self) -> QSize:
@@ -630,6 +637,7 @@ class MainWindow(QMainWindow):
         self._ptt_chip:   Optional[QLabel]         = None
         self._mute_chip:  Optional[QLabel]         = None
         self._toggle_btn: Optional[_IconButton]    = None
+        self._mute_btn:   Optional[_IconButton]    = None
         self._db_lbl:     Optional[QLabel]         = None
         self._clip_lbl:   Optional[QLabel]         = None
         self._last_xrun:  int                      = 0
@@ -673,6 +681,15 @@ class MainWindow(QMainWindow):
                 self._mute_chip.show()
             else:
                 self._mute_chip.hide()
+        if self._mute_btn:
+            if muted:
+                self._mute_btn.set_text("UNMUTE")
+                self._mute_btn.set_colors(
+                    base=QColor("#7a0010"), hot=QColor("#ff1744"), idle_text=QColor("#ff6080"))
+            else:
+                self._mute_btn.set_text("MUTE")
+                self._mute_btn.set_colors(
+                    base=QColor("#3a0010"), hot=QColor("#cc0030"), idle_text=QColor("#8b1a2a"))
 
     def refresh_output_device(self) -> None:
         QTimer.singleShot(0, self._do_refresh_output)
@@ -825,6 +842,14 @@ class MainWindow(QMainWindow):
         text   = "PAUSE" if active else "RESUME"
         self._toggle_btn = _IconButton(icon, text, self._on_toggle)
         btn_lo.addWidget(self._toggle_btn)
+
+        self._mute_btn = _IconButton(
+            "cross", "MUTE", self._on_mute,
+            base_color=QColor("#3a0010"),
+            hot_color =QColor("#cc0030"),
+            text_idle =QColor("#8b1a2a"),
+        )
+        btn_lo.addWidget(self._mute_btn)
 
         settings_btn = _IconButton("gear", "SETTINGS", self._on_settings)
         btn_lo.addWidget(settings_btn)
