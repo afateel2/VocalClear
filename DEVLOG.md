@@ -74,9 +74,10 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 
 ### P3 — Features (nice-to-have)
 
-- [ ] **Window position persistence**  
-  Remember main window position in config and restore on next launch. Settings/soundboard snap
-  positions could also be restored.
+- [x] **Window position persistence** *(done session 005)*  
+  `window_x/window_y` in config. `_restore_position()` called from `_build_ui`, validated  
+  against `QGuiApplication.screenAt()` so a stale position from a disconnected monitor is  
+  silently ignored. `_save_position()` called from `closeEvent` and `_do_destroy`.
 
 - [ ] **Auto-reconnect on device error**  
   If `audio_engine.last_error` is set AND the error looks like a device disconnect, attempt `restart()`
@@ -130,10 +131,10 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `_ptt_chip` QLabel in header: hidden when PTT off; "● PTT" (green fill) when key held,  
   "○ PTT" (dim border) when enabled but key up. Updated every `_tick`.
 
-- [ ] **Soundboard: per-sound loop toggle**  
-  Add "Loop" to the right-click context menu. A looping sound repeats from the start when it ends
-  (`_PlayingInstance` needs a `loop: bool` flag; `get_mix_frame` restarts `pos` instead of marking done).
-  Show a loop indicator (↺) on the button tile when active.
+- [x] **Soundboard: per-sound loop toggle** *(done session 005)*  
+  `_PlayingInstance.loop` flag; `get_mix_frame` restarts `pos=0` instead of marking done.  
+  Context menu shows "↺ Loop" / "↺ Stop loop". "↺" drawn bottom-left of tile when looping.  
+  `_toggle_loop`: flips flag on an in-flight instance or starts a new looping instance.
 
 - [x] **Soundboard: search / filter bar** *(done session 004)*  
   `QLineEdit` row between controls and grid; `_apply_search_filter()` hides non-matching  
@@ -144,10 +145,10 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `soundboard_window.py`, and `tray_app.py`. Extract to a single `_style_dialog(mb)` helper
   in a shared `ui_utils.py` module. Reduces drift if the palette ever changes.
 
-- [ ] **Config schema version**  
-  Add `"schema": 1` to the saved JSON. When `config.py:load()` reads an older config without
-  this field, it's schema 0 — run any needed migrations before updating. Currently migrations
-  are ad-hoc (`block_size > 480 → reset`). A version field makes future migrations systematic.
+- [x] **Config schema version** *(done session 005)*  
+  `"schema": 1` added to DEFAULTS. `_run_migrations()` in `load()` gates the block_size fix  
+  on `saved_schema < 1` and stamps current schema on every load. `window_x/window_y` also  
+  added to DEFAULTS for position persistence.
 
 - [x] **Tray tooltip: live input dB** *(done session 004)*  
   `_tooltip()` now appends the current input dB (e.g. "| −18 dB"); called by the watchdog  
@@ -156,6 +157,35 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 ---
 
 ## Session Log
+
+---
+
+### Session 005 — 2026-06-04 (autonomous loop tick 4)
+
+**Goal:** Config schema versioning, window position persistence, soundboard loop toggle.
+
+**Done:**
+- Config schema: `"schema": 1` in DEFAULTS; `_run_migrations()` gates block_size fix on  
+  `saved_schema < 1`; stamps current schema on every load. `window_x/window_y` also added.
+- Window position: `_restore_position()` in `_build_ui` moves window to saved pos if it's  
+  on a valid screen (`QGuiApplication.screenAt`). `_save_position()` called on X-close and QUIT.
+- Soundboard loop: `_PlayingInstance.loop` flag + `get_mix_frame` restart-on-end; `play(loop=)`;  
+  `looping_names` property; context menu "↺ Loop"/"↺ Stop loop"; "↺" drawn on tile  
+  bottom-left; `_toggle_loop` flips in-flight flag or starts new looping instance.
+
+**Problems:**
+- `_toggle_loop` writes `inst.loop` from the UI thread while the audio callback reads it. This  
+  is safe in CPython (bool assignment is atomic), but not guaranteed by the language spec.  
+  Acceptable given the project's single-platform target and performance requirements.
+
+**Research / Key Facts:**
+- `QGuiApplication.screenAt(QPoint)` returns `None` if the point is not on any screen.  
+  Good for validating saved window positions after monitor reconnect/disconnect.
+- `_PlayingInstance` is a dataclass. Python dataclasses are mutable by default; the `loop`  
+  field can be flipped in place without recreating the instance.
+
+**Next session should do:** Centralize dialog stylesheets, VU meter dB tick marks, "test mic"  
+button in settings, global pause/resume hotkey.
 
 ---
 

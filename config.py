@@ -17,6 +17,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 MAIN_SCRIPT = Path(__file__).resolve().parent / "main.py"
 
 DEFAULTS = {
+    "schema": 1,               # Config format version — bumped when migrations are added
     "input_device": None,      # None = system default
     "output_device": None,     # None = auto-detect VB-CABLE, else system default
     "strength": 0.50,          # Noise reduction strength 0.0–1.0
@@ -29,6 +30,8 @@ DEFAULTS = {
     "ptt_enabled": False,      # Push-to-talk: mic only active while ptt_vk is held
     "ptt_key": "",             # Human-readable PTT key label (e.g. "F4")
     "ptt_vk": 0,               # Win32 virtual-key code for PTT key
+    "window_x": None,          # Main window position (None = OS default)
+    "window_y": None,
 }
 
 
@@ -56,10 +59,19 @@ class Config:
                     log.warning("Corrupt config saved to %s", bad)
                 except Exception:
                     pass
-        # Migrate: reset old large block_size values to the low-latency default
-        bs = self._data.get("block_size", 0)
-        if bs > 480 or bs < 64:
-            self._data["block_size"] = 480
+        self._run_migrations()
+
+    def _run_migrations(self) -> None:
+        saved_schema = self._data.get("schema", 0)
+
+        if saved_schema < 1:
+            # schema 0 → 1: reset out-of-range block_size
+            bs = self._data.get("block_size", 480)
+            if bs > 480 or bs < 64:
+                self._data["block_size"] = 480
+
+        # Always stamp the current schema version (written on next save)
+        self._data["schema"] = DEFAULTS["schema"]
 
     def save(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)

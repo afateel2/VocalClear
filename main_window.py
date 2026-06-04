@@ -16,7 +16,7 @@ from typing import Optional, Callable, TYPE_CHECKING
 from PySide6.QtCore import Qt, QTimer, QRect, QPoint, QPointF, QSize
 from PySide6.QtGui import (
     QColor, QPainter, QPen, QBrush, QFont, QFontMetrics,
-    QLinearGradient, QPalette, QIcon, QPixmap, QPolygonF,
+    QLinearGradient, QPalette, QIcon, QPixmap, QPolygonF, QGuiApplication,
 )
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -657,6 +657,7 @@ class MainWindow(QMainWindow):
         self.setFixedSize(W, H)
         self.setStyleSheet(APP_QSS)
         self._try_set_icon()
+        self._restore_position()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -827,6 +828,20 @@ class MainWindow(QMainWindow):
         if ico.exists():
             self.setWindowIcon(QIcon(str(ico)))
 
+    def _restore_position(self) -> None:
+        x = self.config.get("window_x")
+        y = self.config.get("window_y")
+        if x is None or y is None:
+            return
+        pt = QPoint(int(x), int(y))
+        if QGuiApplication.screenAt(pt) is not None:
+            self.move(pt)
+
+    def _save_position(self) -> None:
+        pos = self.pos()
+        self.config["window_x"] = pos.x()
+        self.config["window_y"] = pos.y()
+
     def _update_status(self) -> None:
         active = self.noise_filter.enabled
         if self._status_chip:
@@ -876,6 +891,7 @@ class MainWindow(QMainWindow):
         self._do_destroy()
 
     def _do_destroy(self) -> None:
+        self._save_position()
         self._timer.stop()
         if self._snapper:
             try:
@@ -888,7 +904,8 @@ class MainWindow(QMainWindow):
             app.quit()
 
     def closeEvent(self, event) -> None:
-        """Title bar X → minimize to tray, do not quit."""
+        """Title bar X → save position and minimize to tray, do not quit."""
+        self._save_position()
         event.ignore()
         self.hide()
 

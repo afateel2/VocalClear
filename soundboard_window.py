@@ -269,6 +269,7 @@ class _SoundButton(QWidget):
         self._on_play    = on_play
         self._on_context = on_context
         self._playing    = False
+        self._looping    = False
         self._hovered    = False
         self.setFixedSize(BTN_W, BTN_H)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -276,6 +277,10 @@ class _SoundButton(QWidget):
     def set_playing(self, v: bool) -> None:
         if v != self._playing:
             self._playing = v; self.update()
+
+    def set_looping(self, v: bool) -> None:
+        if v != self._looping:
+            self._looping = v; self.update()
 
     def paintEvent(self, _):
         p  = QPainter(self)
@@ -344,6 +349,13 @@ class _SoundButton(QWidget):
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
                    | Qt.TextFlag.TextWordWrap,
                    self._name)
+
+        # ── Loop indicator ────────────────────────────────────────────────────
+        if self._looping:
+            p.setFont(FONT_MONO_S)
+            p.setPen(QColor("#00e676") if self._playing else QColor("#007a40"))
+            p.drawText(QRect(3, BH - 16, 14, 12),
+                       Qt.AlignmentFlag.AlignCenter, "↺")
 
         # ── Volume bar (full-width, 3 px at absolute bottom) ─────────────────
         vol    = self._sound.volume
@@ -658,9 +670,11 @@ class SoundBoardWindow(QMainWindow):
                 )
                 self._btns[name] = btn
 
-        # Update playing state + sound ref
+        # Update playing / looping state + sound ref
+        looping = self.sb.looping_names
         for name, btn in self._btns.items():
             btn.set_playing(name in playing)
+            btn.set_looping(name in looping)
             if name in sounds:
                 btn._sound = sounds[name]
                 btn.update()
@@ -699,7 +713,10 @@ class SoundBoardWindow(QMainWindow):
             "QMenu::item:selected { background: #007a40; color: #030603; }"
             "QMenu::separator { height: 1px; background: #004d28; margin: 2px 0; }"
         )
+        is_looping = name in self.sb.looping_names
+        loop_label = "  ↺  Stop loop" if is_looping else "  ↺  Loop"
         menu.addAction(f"  ▶  Play",         lambda: self._play(name))
+        menu.addAction(loop_label,            lambda: self._toggle_loop(name))
         menu.addAction(f"  ▪  Stop",         lambda: self._stop_one(name))
         menu.addSeparator()
         menu.addAction("  VOL  Set volume…", lambda: self._show_volume(name))
@@ -798,6 +815,17 @@ class SoundBoardWindow(QMainWindow):
             QMessageBox.warning(self, "Rename Failed",
                 f"Could not rename '{name}' to '{text}'.\n"
                 "The name may already be in use.")
+        self._refresh_buttons()
+
+    def _toggle_loop(self, name: str) -> None:
+        with self.sb._play_lock:
+            for inst in self.sb._playing:
+                if inst.sound.name == name:
+                    inst.loop = not inst.loop
+                    self._refresh_buttons()
+                    return
+        # Not playing — start it in loop mode
+        self.sb.play(name, loop=True)
         self._refresh_buttons()
 
     def _remove(self, name: str) -> None:

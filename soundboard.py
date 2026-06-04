@@ -96,7 +96,8 @@ class Sound:
 @dataclass
 class _PlayingInstance:
     sound: Sound
-    pos:   int = 0
+    pos:   int  = 0
+    loop:  bool = False
 
 
 # ── Local monitor mixer ─────────────────────────────────────────────────────────
@@ -330,7 +331,7 @@ class SoundBoard:
         self._save_sounds_config()
         self._fire_sounds_changed()
 
-    def play(self, name: str) -> None:
+    def play(self, name: str, loop: bool = False) -> None:
         """Trigger a sound. Respects overlap setting. Fires monitor if enabled."""
         with self._sounds_lock:
             snd = self._sounds.get(name)
@@ -340,7 +341,7 @@ class SoundBoard:
         with self._play_lock:
             if not self.overlap:
                 self._playing.clear()
-            self._playing.append(_PlayingInstance(sound=snd, pos=0))
+            self._playing.append(_PlayingInstance(sound=snd, pos=0, loop=loop))
 
         # Local monitor: play through speakers so the operator can hear it
         if self._monitor_enabled and self._monitor.active:
@@ -378,6 +379,11 @@ class SoundBoard:
         with self._play_lock:
             return {p.sound.name for p in self._playing}
 
+    @property
+    def looping_names(self) -> set[str]:
+        with self._play_lock:
+            return {p.sound.name for p in self._playing if p.loop}
+
     def stop_watcher(self) -> None:
         self._watch_running = False
         self._monitor.stop()
@@ -404,7 +410,10 @@ class SoundBoard:
 
                 if len(chunk) < n_frames:
                     out[:len(chunk)] += chunk * vol
-                    done.append(inst)
+                    if inst.loop:
+                        inst.pos = 0   # restart from beginning
+                    else:
+                        done.append(inst)
                 else:
                     out += chunk * vol
                     inst.pos = end
