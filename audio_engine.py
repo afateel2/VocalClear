@@ -93,6 +93,7 @@ class AudioEngine:
         self.output_rms:         float         = 0.0
         self.input_latency_ms:   float         = 0.0
         self.output_latency_ms:  float         = 0.0
+        self.process_time_ms:    float         = 0.0   # rolling avg of filter CPU time
 
         # SoundBoard (optional — attach after construction)
         self._soundboard: Optional[SoundBoard] = None
@@ -303,7 +304,10 @@ class AudioEngine:
 
         # ── RNNoise / Wiener: inline processing (0.5 ms, safe in callback) ───
         try:
+            _t0 = time.perf_counter()
             processed = self.noise_filter.process(mono)
+            self.process_time_ms = (
+                self.process_time_ms * 0.9 + (time.perf_counter() - _t0) * 1000 * 0.1)
             if not self._ptt_active:
                 processed = np.zeros_like(processed)
             mixed     = self._mix_soundboard(processed, frames)

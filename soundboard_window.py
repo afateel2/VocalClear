@@ -773,11 +773,7 @@ class SoundBoardWindow(QMainWindow):
         mb.setText("Merge imported sounds with existing ones?\n\n"
                    "Yes = keep existing + add imported\n"
                    "No  = replace all sounds")
-        mb.setStyleSheet(
-            "QMessageBox { background: #030603; color: #c8ffd4; }"
-            "QPushButton { background: #007a40; color: #030603; padding: 4px 12px; "
-            "              border: none; font-family: Consolas; }"
-            "QPushButton:hover { background: #00e676; }")
+        from ui_utils import style_dialog; style_dialog(mb)
         mb.setStandardButtons(QMessageBox.StandardButton.Yes |
                               QMessageBox.StandardButton.No  |
                               QMessageBox.StandardButton.Cancel)
@@ -835,11 +831,7 @@ class SoundBoardWindow(QMainWindow):
             f"Remove '{name}' from the soundboard?\n"
             "(Removes from VocalClear's sounds folder.\n"
             "Your original source file is unchanged.)")
-        mb.setStyleSheet(
-            "QMessageBox { background: #030603; color: #c8ffd4; }"
-            "QPushButton { background: #007a40; color: #030603; padding: 4px 12px; "
-            "              border: none; font-family: Consolas; }"
-            "QPushButton:hover { background: #00e676; }")
+        from ui_utils import style_dialog; style_dialog(mb)
         mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if mb.exec() == QMessageBox.StandardButton.Yes:
             self.sb.remove_sound(name)

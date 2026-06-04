@@ -79,19 +79,20 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   against `QGuiApplication.screenAt()` so a stale position from a disconnected monitor is  
   silently ignored. `_save_position()` called from `closeEvent` and `_do_destroy`.
 
-- [ ] **Auto-reconnect on device error**  
-  If `audio_engine.last_error` is set AND the error looks like a device disconnect, attempt `restart()`
-  after a 5-second delay. Cap retry attempts to avoid loops. Show tray notification on each attempt.
+- [x] **Auto-reconnect on device error** *(done session 004 — watchdog)*
 
-- [ ] **VU meter dB tick marks**  
-  Add subtle dB labels (−6, −12, −24) on the VU meter widget similar to the history graph.
+- [x] **VU meter dB tick marks** *(done session 006)*  
+  `_draw_channel(db_ticks=True)` on the OUT channel: dotted reference lines + dim labels  
+  at −18 dB (bar 7) and −12 dB (bar 15) drawn right-justified inside the channel.
 
 - [ ] **Keyboard shortcut: global pause/resume toggle**  
   A global hotkey (e.g. Ctrl+Shift+V configurable) to toggle `noise_filter.enabled` without opening
   the window. Different from PTT which requires holding.
 
-- [ ] **CPU/latency live readout**  
-  Show current callback processing time in the bottom bar (derived from `audio_engine` timing).
+- [x] **CPU/latency live readout** *(done session 006)*  
+  `engine.process_time_ms` is a 10-sample rolling average of `noise_filter.process()` wall time  
+  in the inline callback path. Displayed in the LATENCY info card row as "· 0.42 ms cpu";  
+  refreshed every 20 ticks (~1 s).
 
 - [ ] **Soundboard: volume normalizer**  
   Button to normalize all loaded sounds to the same RMS target so they play at consistent volumes.
@@ -140,10 +141,10 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `QLineEdit` row between controls and grid; `_apply_search_filter()` hides non-matching  
   buttons. Called on text change and at end of `_refresh_buttons`. Escape clears filter.
 
-- [ ] **Centralize dialog stylesheets**  
-  The same `QMessageBox` dark-theme CSS block is copy-pasted in `main_window.py`,
-  `soundboard_window.py`, and `tray_app.py`. Extract to a single `_style_dialog(mb)` helper
-  in a shared `ui_utils.py` module. Reduces drift if the palette ever changes.
+- [x] **Centralize dialog stylesheets** *(done session 006)*  
+  `ui_utils.py` created with `style_dialog(widget)` and `_DARK_DIALOG_QSS`. Three inline  
+  QMessageBox style blocks in `main_window.py` and `soundboard_window.py` replaced with  
+  `from ui_utils import style_dialog; style_dialog(mb)`.
 
 - [x] **Config schema version** *(done session 005)*  
   `"schema": 1` added to DEFAULTS. `_run_migrations()` in `load()` gates the block_size fix  
@@ -157,6 +158,34 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 ---
 
 ## Session Log
+
+---
+
+### Session 006 — 2026-06-04 (autonomous loop tick 5)
+
+**Goal:** Clean up stale backlog, centralize dialog CSS, VU dB tick marks, CPU readout.
+
+**Done:**
+- Marked "Auto-reconnect" as done (already covered by session 004 watchdog).
+- `ui_utils.py` with `style_dialog()` / `_DARK_DIALOG_QSS`; replaced 3 inline QMessageBox  
+  blocks in `main_window.py` and `soundboard_window.py`.
+- VU meter dB tick marks: `_draw_channel(db_ticks=True)` on OUT channel; dotted reference  
+  lines + right-justified dim labels at −18 dB (bar 7) and −12 dB (bar 15).
+- CPU readout: `engine.process_time_ms` — 10-sample EMA of inline filter wall time;  
+  appended to LATENCY row as "· 0.42 ms cpu"; refreshed every 20 ticks (~1 s).
+
+**Problems:**
+- None.
+
+**Research / Key Facts:**
+- `time.perf_counter()` in the PortAudio callback is safe on Windows (it uses the TSC/HPET  
+  counter, which doesn't block). Confirmed by sounddevice docs: callback must be non-blocking  
+  but reading a hardware counter is fine.
+- The EMA formula `new = old * 0.9 + sample * 0.1` converges to steady state in ~20 samples  
+  (~200 ms at 10 ms blocks). Fast enough for the 1 s display refresh cycle.
+
+**Next session should do:** Soundboard volume normalizer, "test mic" button in settings,  
+global pause/resume hotkey (research win32 RegisterHotKey approach).
 
 ---
 

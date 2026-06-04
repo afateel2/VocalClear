@@ -265,14 +265,16 @@ class _VUMeter(QWidget):
         self._draw_channel(p, x0=2,        w=half, h=meter_h, y0=LBL_H,
                            rms=self.in_rms,  peak=self._peak_in,  label="IN")
         self._draw_channel(p, x0=half + 4,  w=half, h=meter_h, y0=LBL_H,
-                           rms=self.out_rms, peak=self._peak_out, label="OUT")
+                           rms=self.out_rms, peak=self._peak_out, label="OUT",
+                           db_ticks=True)
 
         # Centre divider
         p.setPen(QPen(C_GREEN_LO, 1))
         mid = half + 3
         p.drawLine(mid, LBL_H, mid, ch - 4)
 
-    def _draw_channel(self, p: QPainter, x0, w, h, y0, rms, peak, label):
+    def _draw_channel(self, p: QPainter, x0, w, h, y0, rms, peak, label,
+                      db_ticks: bool = False):
         n       = VU_BARS
         seg_h   = max(2, (h - n) // n)
         step    = seg_h + 1
@@ -318,6 +320,19 @@ class _VUMeter(QWidget):
                 else:
                     pc = C_RED.lighter(150)
                 p.fillRect(QRect(x0, by, w, 1), pc)
+
+        # dB reference tick marks at -12 and -18 dBFS
+        # Bar index: floor(10^(db/20) * n * 2.8), clamped to n-1
+        if db_ticks:
+            p.setFont(FONT_MONO_S)
+            fm = QFontMetrics(FONT_MONO_S)
+            for db_str, bar_i in (("-18", 7), ("-12", 15)):
+                tick_y = y0 + h - (bar_i + 1) * step
+                p.setPen(QPen(QColor("#1a3f1a"), 1, Qt.PenStyle.DotLine))
+                p.drawLine(x0, tick_y, x0 + w, tick_y)
+                p.setPen(QColor("#1a3f1a"))
+                tw = fm.horizontalAdvance(db_str)
+                p.drawText(x0 + w - tw - 1, tick_y + step - 1, db_str)
 
 
 # ── History graph ─────────────────────────────────────────────────────────────
@@ -512,8 +527,10 @@ class _InfoCard(QWidget):
     def refresh_latency(self) -> None:
         in_ms  = self._engine.input_latency_ms
         out_ms = self._engine.output_latency_ms
+        cpu_ms = self._engine.process_time_ms
         if in_ms or out_ms:
-            self._lat_lbl.setText(f"{in_ms:.1f} ms in / {out_ms:.1f} ms out")
+            cpu_str = f"  ·  {cpu_ms:.2f} ms cpu" if cpu_ms > 0.01 else ""
+            self._lat_lbl.setText(f"{in_ms:.1f} ms in / {out_ms:.1f} ms out{cpu_str}")
         else:
             self._lat_lbl.setText("measuring…")
 
@@ -616,6 +633,7 @@ class MainWindow(QMainWindow):
         self._xrun_flash: int                      = 0   # ticks remaining for amber flash
         self._clip_count: int                      = 0   # consecutive high-RMS ticks
         self._clip_flash: int                      = 0   # ticks remaining for clip warning
+        self._tick_count: int                      = 0
 
         self._build_ui()
         _apply_dark_titlebar(int(self.winId()))
@@ -880,12 +898,7 @@ class MainWindow(QMainWindow):
             mb.setIcon(QMessageBox.Icon.Warning)
             mb.setStandardButtons(
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            mb.setStyleSheet(
-                "QMessageBox { background: #030603; color: #c8ffd4; }"
-                "QPushButton { background: #007a40; color: #030603; padding: 4px 14px; "
-                "              border: none; font-family: Consolas; }"
-                "QPushButton:hover { background: #00e676; }"
-            )
+            from ui_utils import style_dialog; style_dialog(mb)
             if mb.exec() != QMessageBox.StandardButton.Yes:
                 return
         self._do_destroy()
@@ -967,5 +980,8 @@ class MainWindow(QMainWindow):
                 self._db_lbl.setStyleSheet("color: #3a6642;")
                 self._db_lbl.setText(
                     f"IN  {_rms_to_db(in_rms):+.1f} dB       OUT  {_rms_to_db(out_rms):+.1f} dB")
+        self._tick_count += 1
+        if self._tick_count % 20 == 0 and self._info_card:
+            self._info_card.refresh_latency()
         if self._info_card:
             self._info_card.refresh_error()
