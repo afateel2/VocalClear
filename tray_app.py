@@ -469,20 +469,17 @@ class TrayApp:
         self._play_toggle_sound(not self._muted)
 
     def _play_toggle_sound(self, active: bool) -> None:
-        def _play():
-            try:
-                import sounddevice as _sd, numpy as _np
-                sr   = 44100
-                freq = 880.0 if active else 587.0
-                dur  = 0.12
-                t    = _np.linspace(0, dur, int(sr * dur), endpoint=False)
-                env  = _np.linspace(1.0, 0.0, int(sr * dur))
-                wave = (0.25 * _np.sin(2 * _np.pi * freq * t) * env).astype(_np.float32)
-                _sd.play(wave, samplerate=sr)
-                _sd.wait()
-            except Exception:
-                pass
-        threading.Thread(target=_play, daemon=True, name="VocalClear-tone").start()
+        # winsound.Beep() uses the Windows audio session directly — no PortAudio
+        # stream setup overhead — so the tone plays immediately on a single press.
+        # sounddevice.play() opened a new OutputStream each call (~50-100 ms to
+        # initialise) which consumed most of the 120 ms tone before it was audible.
+        import winsound as _ws
+        freq = 880 if active else 587   # unmute = high, mute = low
+        threading.Thread(
+            target=lambda: _ws.Beep(freq, 150),
+            daemon=True,
+            name="VocalClear-tone",
+        ).start()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Helpers
