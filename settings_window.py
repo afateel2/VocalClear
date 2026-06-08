@@ -497,10 +497,6 @@ class SettingsWindow(QMainWindow):
         self._build_ui()
         _apply_dark_titlebar(int(self.winId()))
 
-        if self._snapper:
-            QTimer.singleShot(50, lambda: self._snapper.register(
-                "settings", self, snap_side="right-only"))
-
     # ── Build UI ──────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
@@ -937,6 +933,8 @@ class SettingsWindow(QMainWindow):
         self._refresh_status()
         self._check_dirty()
         if self._snapper:
+            QTimer.singleShot(50, lambda: self._snapper.register(
+                "settings", self, snap_side="right-only"))
             self._snapper.position_right_of("main", self)
         event.accept()
 

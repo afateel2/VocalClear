@@ -481,10 +481,6 @@ class SoundBoardWindow(QMainWindow):
         self._refresh_timer.timeout.connect(self._poll_refresh)
         self._refresh_timer.start(50)
 
-        if self._snapper:
-            QTimer.singleShot(50, lambda: self._snapper.register(
-                "soundboard", self, snap_side="left-only"))
-
     # ── Build UI ──────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
