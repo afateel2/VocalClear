@@ -345,9 +345,10 @@ class AudioEngine:
             if enabled and vk:
                 state = _ct.windll.user32.GetAsyncKeyState(int(vk))
                 self._ptt_active = bool(state & 0x8000)
+                time.sleep(0.010)   # 10ms for low-latency key response
             else:
                 self._ptt_active = True   # PTT off → always open
-            time.sleep(0.010)
+                time.sleep(0.100)   # 100ms is plenty when there's nothing to poll
 
     # ──────────────────────────────────────────────────────────────────────────
     # Soundboard mixing helper

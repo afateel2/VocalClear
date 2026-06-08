@@ -91,8 +91,9 @@ class _BarSlider(QWidget):
 
     def __init__(self, value: float = 0.5, parent=None):
         super().__init__(parent)
-        self._value   = max(0.0, min(1.0, value))
-        self._on_change: Optional[Callable[[float], None]] = None
+        self._value    = max(0.0, min(1.0, value))
+        self._on_change:  Optional[Callable[[float], None]] = None
+        self._on_release: Optional[Callable[[], None]]      = None
         self.setFixedHeight(20)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -108,6 +109,9 @@ class _BarSlider(QWidget):
 
     def set_on_change(self, cb: Callable[[float], None]) -> None:
         self._on_change = cb
+
+    def set_on_release(self, cb: Callable[[], None]) -> None:
+        self._on_release = cb
 
     def paintEvent(self, _):
         p   = QPainter(self)
@@ -147,6 +151,10 @@ class _BarSlider(QWidget):
     def mouseMoveEvent(self, e):
         if e.buttons() & Qt.MouseButton.LeftButton:
             self._set_from_x(e.position().x())
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._on_release:
+            self._on_release()
 
 
 class _GainSlider(_BarSlider):
@@ -543,6 +551,7 @@ class SettingsWindow(QMainWindow):
 
         self._strength_bar = _BarSlider(value=self.config["strength"])
         self._strength_bar.set_on_change(self._on_strength)
+        self._strength_bar.set_on_release(self.config.save)
         eng.addWidget(self._strength_bar)
 
         if self.noise_filter.backend == "wiener":
@@ -637,6 +646,7 @@ class SettingsWindow(QMainWindow):
         init_pct  = (init_gain - 0.5) / 2.5
         self._gain_bar = _GainSlider(value=init_pct)
         self._gain_bar.set_on_change(self._on_gain)
+        self._gain_bar.set_on_release(self.config.save)
         gain_c.addWidget(self._gain_bar)
 
         # ── Push-to-talk ──────────────────────────────────────────────────────
@@ -733,14 +743,14 @@ class SettingsWindow(QMainWindow):
 
     def _on_strength(self, v: float) -> None:
         self.noise_filter.strength = v
-        self.config["strength"] = v
+        self.config.set_nosave("strength", v)   # real-time; flush to disk on release
         if self._strength_val:
             self._strength_val.setText(f"  {int(v*100):3d}%")
         self._check_dirty()
 
     def _on_gain(self, v: float) -> None:
         gain = 0.5 + v * 2.5
-        self.config["output_gain"] = gain
+        self.config.set_nosave("output_gain", gain)  # real-time; flush to disk on release
         if self._gain_val:
             self._gain_val.setText(f"  {gain:.2f}×")
         self._check_dirty()

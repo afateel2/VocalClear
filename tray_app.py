@@ -115,6 +115,8 @@ class TrayApp:
         self._watchdog_restart_active: bool                   = False
         self._toggle_hotkey_was_down:  bool                   = False
         self._toast:                   Optional[_ToastOverlay] = None
+        self._mute_action:             Optional[QAction]       = None
+        self._toggle_action:           Optional[QAction]       = None
 
         # Check VB-CABLE on startup
         self._vbc_index = find_vbcable_device()
@@ -184,7 +186,7 @@ class TrayApp:
         # R-CTRL + \ global toggle hotkey — polled on the Qt main thread
         hotkey_timer = QTimer()
         hotkey_timer.timeout.connect(self._check_toggle_hotkey)
-        hotkey_timer.start(30)
+        hotkey_timer.start(50)   # 50ms → ≤50ms response, imperceptible vs 30ms
 
         app.exec()
 
@@ -220,51 +222,63 @@ class TrayApp:
         self._tray = QSystemTrayIcon(app)
         self._tray.setIcon(_pil_to_qicon(draw_icon(64, active=self._active)))
         self._tray.setToolTip(self._tooltip())
-        self._tray.setContextMenu(self._build_menu())
-        self._tray.activated.connect(self._on_tray_activated)
-        self._tray.show()
 
-    def _build_menu(self) -> QMenu:
-        menu = QMenu()
-        menu.setStyleSheet(
+        # Build the context menu once; only the two dynamic actions need text updates.
+        _QSS = (
             "QMenu { background: #0b160b; color: #c8ffd4; border: 1px solid #007a40; }"
             "QMenu::item { padding: 5px 20px; font-family: Consolas; font-size: 9pt; }"
             "QMenu::item:selected { background: #007a40; color: #030603; }"
             "QMenu::separator { height: 1px; background: #007a40; margin: 2px 0; }"
         )
+        menu = QMenu()
+        menu.setStyleSheet(_QSS)
+
         show_act     = QAction("⊞  Show Window", menu)
-        mute_act     = QAction(
-            ("●  Unmute mic  (R-Ctrl+\\)" if self._muted else "⊘  Mute mic  (R-Ctrl+\\)"), menu)
-        toggle_act   = QAction(
-            ("⏸  Pause filter (passthrough)" if self._active else "▶  Resume filter"), menu)
+        self._mute_action   = QAction("", menu)
+        self._toggle_action = QAction("", menu)
         settings_act = QAction("⚙  Settings",       menu)
         sb_act       = QAction("🎛  Soundboard",     menu)
         quit_act     = QAction("✖  Quit VocalClear", menu)
 
         show_act.triggered.connect(self._show_main_window)
-        mute_act.triggered.connect(self._do_mute_toggle)
-        toggle_act.triggered.connect(self._do_toggle)
+        self._mute_action.triggered.connect(self._do_mute_toggle)
+        self._toggle_action.triggered.connect(self._do_toggle)
         settings_act.triggered.connect(self._open_settings)
         sb_act.triggered.connect(self._open_soundboard)
         quit_act.triggered.connect(self._do_quit)
 
         menu.addAction(show_act)
         menu.addSeparator()
-        menu.addAction(mute_act)
-        menu.addAction(toggle_act)
+        menu.addAction(self._mute_action)
+        menu.addAction(self._toggle_action)
         menu.addAction(settings_act)
         menu.addAction(sb_act)
         menu.addSeparator()
         menu.addAction(quit_act)
-        return menu
+
+        self._tray.setContextMenu(menu)
+        self._update_menu_labels()   # set initial text on the two dynamic actions
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _update_menu_labels(self) -> None:
+        """Update the two state-dependent menu action labels without rebuilding the menu."""
+        if self._mute_action:
+            self._mute_action.setText(
+                "●  Unmute mic  (R-Ctrl+\\)" if self._muted
+                else "⊘  Mute mic  (R-Ctrl+\\)")
+        if self._toggle_action:
+            self._toggle_action.setText(
+                "⏸  Pause filter (passthrough)" if self._active
+                else "▶  Resume filter")
 
     def _refresh_tray(self) -> None:
-        """Rebuild icon + tooltip + menu after a state change."""
+        """Update icon + tooltip + dynamic menu labels after a state change."""
         if not self._tray:
             return
         self._tray.setIcon(_pil_to_qicon(draw_icon(64, active=self._active)))
         self._tray.setToolTip(self._tooltip())
-        self._tray.setContextMenu(self._build_menu())
+        self._update_menu_labels()
 
     def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:

@@ -961,6 +961,16 @@ class MainWindow(QMainWindow):
         if app:
             app.quit()
 
+    def showEvent(self, event) -> None:
+        if not self._timer.isActive():
+            self._timer.start(VU_TICK_MS)
+        event.accept()
+
+    def hideEvent(self, event) -> None:
+        # Stop the VU/history timer while the window is hidden — no visible output to drive.
+        self._timer.stop()
+        event.accept()
+
     def closeEvent(self, event) -> None:
         """Title bar X → save position and minimize to tray, do not quit."""
         self._save_position()
@@ -1028,5 +1038,5 @@ class MainWindow(QMainWindow):
         self._tick_count += 1
         if self._tick_count % 20 == 0 and self._info_card:
             self._info_card.refresh_latency()
-        if self._info_card:
+        if self._tick_count % 10 == 0 and self._info_card:  # every 500ms — errors are rare
             self._info_card.refresh_error()

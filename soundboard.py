@@ -79,7 +79,7 @@ _winmm       = ctypes.windll.winmm
 
 TARGET_SR   = 48_000
 AUDIO_EXTS  = {".mp3", ".ogg", ".m4a", ".wav", ".flac"}
-WATCH_POLL  = 2.0     # seconds between folder scans
+WATCH_POLL  = 5.0     # seconds between folder scans
 _CFG_FILE   = "sounds_config.json"
 
 
@@ -261,15 +261,22 @@ class SoundBoard:
     def set_sounds_dir(self, path: Path) -> None:
         """Point to a folder and reload all sounds found there."""
         self.sounds_dir = path
+        # Restore persisted global settings (master_volume, monitor, etc.) once up-front
+        # before scanning so every load_file call sees the correct state.
+        self._load_sounds_config()
         self._start_watcher()
         self._scan_folder()
 
-    def load_file(self, path: Path) -> Optional[str]:
+    def load_file(self, path: Path,
+                  _preloaded_cfg: Optional[dict] = None) -> Optional[str]:
         """
         Load a single audio file, resample to 48 kHz, store it.
 
         If the file is not inside sounds_dir it is copied there first so that
         it survives restarts.  Returns the sound name on success, None on error.
+
+        _preloaded_cfg: if provided, use it for per-sound settings instead of
+        reading sounds_config.json again (used by _scan_folder to avoid N reads).
         """
         # Copy to sounds_dir so the file persists across restarts
         if self.sounds_dir is not None:
@@ -289,8 +296,12 @@ class SoundBoard:
             print(f"[SoundBoard] Failed to load {path.name}: {exc}")
             return None
 
-        # Restore saved settings (hotkey, volume) from the config file
-        saved = self._load_sounds_config().get(name, {})
+        # Use pre-loaded config when scanning (avoids N disk reads); fall back to
+        # reading from disk when called for a single manually-added file.
+        if _preloaded_cfg is not None:
+            saved = _preloaded_cfg.get(name, {})
+        else:
+            saved = self._load_sounds_config().get(name, {})
 
         with self._sounds_lock:
             existing = self._sounds.get(name)
@@ -624,8 +635,13 @@ class SoundBoard:
                     self._sounds.pop(name)
             self._fire_sounds_changed()
 
-        for p in new:
-            self.load_file(Path(p))
+        if new:
+            # Load config once for all new sounds — avoid N reads per scan cycle.
+            # _load_sounds_config also applies global settings (master_volume etc.)
+            # so this also keeps those in sync if the config file changed.
+            cfg_cache = self._load_sounds_config()
+            for p in new:
+                self.load_file(Path(p), _preloaded_cfg=cfg_cache)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Callbacks

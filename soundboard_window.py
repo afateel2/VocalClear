@@ -916,8 +916,9 @@ class SoundBoardWindow(QMainWindow):
         event.accept()
 
     def closeEvent(self, event) -> None:
-        """X button hides the window; keeps timer + callbacks alive for reopen."""
+        """X button hides the window; keeps callbacks alive for reopen."""
         event.ignore()
         self.hide()
+        self._refresh_timer.stop()   # no UI to update while hidden
         if self._snapper:
             self._snapper.unregister("soundboard")

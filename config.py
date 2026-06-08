@@ -100,6 +100,11 @@ class Config:
         self._data[key] = value
         self.save()
 
+    def set_nosave(self, key: str, value) -> None:
+        """Update a value in memory without writing to disk.
+        Use for rapid in-flight updates (slider drag); call save() when done."""
+        self._data[key] = value
+
     def get(self, key: str, default=None):
         return self._data.get(key, default)
 
