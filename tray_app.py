@@ -336,6 +336,10 @@ class TrayApp:
             on_quit       = self._do_quit,
             snapper       = self._snapper,
         )
+        # Register main window as the snap anchor so settings/soundboard can
+        # position themselves relative to it.  Delayed 50ms so the HWND is valid.
+        self._snapper.set_anchor("main")
+        QTimer.singleShot(50, lambda: self._snapper.register("main", self._main_window))
 
     # ──────────────────────────────────────────────────────────────────────────
     # Actions (all called on the Qt main thread)

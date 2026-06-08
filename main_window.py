@@ -655,19 +655,6 @@ class MainWindow(QMainWindow):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run(self) -> None:
-        if self._snapper:
-            self._snapper.set_anchor("main")
-            QTimer.singleShot(50, lambda: self._snapper.register("main", self))
-        self.show()
-        QTimer.singleShot(2000, self._do_refresh_latency)
-        QApplication.instance().exec()
-
-    def show_window(self) -> None:
-        self.show()
-        self.raise_()
-        self.activateWindow()
-
     def quit_from_tray(self) -> None:
         """Called by tray Quit — runs on the Qt main thread."""
         self._confirm_and_quit()
