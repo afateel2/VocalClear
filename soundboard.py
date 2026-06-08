@@ -333,7 +333,8 @@ class SoundBoard:
         if snd and self.sounds_dir:
             path = Path(snd.path)
             try:
-                self._watched_paths.discard(str(path))
+                with self._watch_lock:
+                    self._watched_paths.discard(str(path))
                 if path.parent.resolve() == self.sounds_dir.resolve():
                     path.unlink(missing_ok=True)
             except Exception as exc:

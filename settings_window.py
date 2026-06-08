@@ -161,11 +161,27 @@ class _GainSlider(_BarSlider):
     """Bar slider that also draws a unity (1.0×) tick mark."""
 
     def paintEvent(self, _):
-        super().paintEvent(_)
-        p      = QPainter(self)
-        cw     = self.width()
-        ch     = self.height()
-        unity  = int(cw * 0.20)   # gain 0.5 at 0%, unity (1.0×) at 20%
+        p   = QPainter(self)
+        cw  = self.width()
+        ch  = self.height()
+        pct = self._value
+
+        p.fillRect(self.rect(), C_BG_INPUT)
+
+        p.setPen(QPen(C_GRID, 1))
+        for x in range(0, cw, 12):
+            p.drawLine(x, 0, x, ch)
+
+        filled = max(1, int(cw * pct))
+        p.fillRect(QRect(0, 3, filled, ch - 6), C_GREEN_DIM)
+        if filled > 4:
+            p.fillRect(QRect(filled - 4, 3, 4, ch - 6), C_GREEN)
+
+        p.setPen(QPen(C_GREEN, 1))
+        p.drawLine(filled, 0, filled, ch)
+
+        # Unity (1.0×) tick at 20% of width (gain 0.5 at 0%, unity at 20%)
+        unity = int(cw * 0.20)
         p.setPen(QPen(C_AMBER, 1, Qt.PenStyle.DashLine))
         p.drawLine(unity, 0, unity, ch)
 

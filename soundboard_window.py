@@ -190,8 +190,9 @@ class _SmallBtn(_HeaderBtn):
 class _SFXBar(QWidget):
     def __init__(self, value: float = 0.8, parent=None):
         super().__init__(parent)
-        self._value     = value
-        self._on_change = None
+        self._value      = value
+        self._on_change  = None
+        self._on_release = None
         self.setFixedHeight(20)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -203,6 +204,8 @@ class _SFXBar(QWidget):
     def value(self, v: float) -> None: self._value = v; self.update()
 
     def set_on_change(self, cb) -> None: self._on_change = cb
+
+    def set_on_release(self, cb) -> None: self._on_release = cb
 
     def paintEvent(self, _):
         p  = QPainter(self)
@@ -248,6 +251,10 @@ class _SFXBar(QWidget):
 
     def mouseMoveEvent(self, e):
         if e.buttons() & Qt.MouseButton.LeftButton: self._set_from_x(int(e.position().x()))
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._on_release:
+            self._on_release()
 
 
 # ── Sound button ──────────────────────────────────────────────────────────────
@@ -549,6 +556,7 @@ class SoundBoardWindow(QMainWindow):
         sfx_group = QHBoxLayout(); sfx_group.setSpacing(6)
         self._sfx_bar = _SFXBar(self.sb.master_volume)
         self._sfx_bar.set_on_change(self._on_sfx)
+        self._sfx_bar.set_on_release(self.sb._save_sounds_config)
         self._sfx_pct = QLabel(f"{int(self.sb.master_volume * 100)}%")
         self._sfx_pct.setFont(FONT_MONO_L)
         self._sfx_pct.setStyleSheet("color: #00e676; min-width: 32px;")
@@ -864,7 +872,6 @@ class SoundBoardWindow(QMainWindow):
     def _on_sfx(self, v: float) -> None:
         self.sb.master_volume = v
         self._sfx_pct.setText(f"{int(v * 100)}%")
-        self.sb._save_sounds_config()
 
     # ── Search ────────────────────────────────────────────────────────────────
 

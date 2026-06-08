@@ -902,8 +902,9 @@ class MainWindow(QMainWindow):
 
     def _save_position(self) -> None:
         pos = self.pos()
-        self.config["window_x"] = pos.x()
-        self.config["window_y"] = pos.y()
+        self.config.set_nosave("window_x", pos.x())
+        self.config.set_nosave("window_y", pos.y())
+        self.config.save()
 
     def _update_status(self) -> None:
         active = self.noise_filter.enabled
