@@ -828,12 +828,19 @@ class SoundBoardWindow(QMainWindow):
         self._refresh_buttons()
 
     def _toggle_loop(self, name: str) -> None:
+        # Mutate loop flag under the lock, then refresh OUTSIDE it.
+        # _refresh_buttons() calls sb.playing_names which re-acquires _play_lock;
+        # doing so while we already hold it would deadlock (Lock is not reentrant).
+        found = False
         with self.sb._play_lock:
             for inst in self.sb._playing:
                 if inst.sound.name == name:
                     inst.loop = not inst.loop
-                    self._refresh_buttons()
-                    return
+                    found = True
+                    break
+        if found:
+            self._refresh_buttons()
+            return
         # Not playing — start it in loop mode
         self.sb.play(name, loop=True)
         self._refresh_buttons()
