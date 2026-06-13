@@ -637,10 +637,20 @@ class SoundBoard:
 
         for p in gone_paths:
             name = Path(p).stem
-            # Only auto-remove if it's not in _sounds already removed by user
+            removed = False
             with self._sounds_lock:
                 if name in self._sounds:
                     self._sounds.pop(name)
+                    removed = True
+            if removed:
+                # Stop any looping instance — it would loop forever with no UI
+                # button once the sound disappears from the board.
+                # Non-looping instances are allowed to finish naturally.
+                with self._play_lock:
+                    self._playing = [
+                        i for i in self._playing
+                        if not (i.sound.name == name and i.loop)
+                    ]
             self._fire_sounds_changed()
 
         if new:
