@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon, QPixmap, QImage, QAction, QFont, QGuiApplication
+from PySide6.QtGui import (
+    QIcon, QPixmap, QImage, QAction, QFont, QGuiApplication,
+    QColor, QPainter, QPen, QBrush,
+)
 from PySide6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QWidget, QLabel, QVBoxLayout)
 
@@ -51,8 +54,18 @@ def _pil_to_qicon(pil_img) -> QIcon:
 
 
 class _ToastOverlay(QWidget):
-    """Brief always-on-top state badge shown in the bottom-right corner when the
-    global toggle hotkey fires. Disappears after 2 seconds without stealing focus."""
+    """Brief non-activating state badge in the corner when the hotkey fires.
+
+    Uses WA_TranslucentBackground for a semi-transparent overlay and applies
+    WS_EX_NOACTIVATE at the Win32 level before the first show() so that
+    borderless full-screen apps (games, Discord, video players) are not
+    disrupted.  True exclusive-DirectX full-screen is not supported without
+    driver-level hooks (NVIDIA Overlay approach) — but borderless windowed
+    full-screen, which covers virtually all modern use cases, works correctly.
+    """
+
+    _GWL_EXSTYLE      = -20
+    _WS_EX_NOACTIVATE = 0x08000000
 
     def __init__(self):
         super().__init__(
@@ -63,10 +76,18 @@ class _ToastOverlay(QWidget):
             | Qt.WindowType.WindowDoesNotAcceptFocus,
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # Per-pixel alpha: the OS compositor blends our painted pixels with
+        # whatever is beneath, giving a true semi-transparent overlay.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        self._bg_col     = QColor(11, 22, 11, 210)
+        self._border_col = QColor("#007a40")
 
         self._lbl = QLabel()
         self._lbl.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
         self._lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Keep label background transparent so our paintEvent shows through.
+        self._lbl.setStyleSheet("background: transparent;")
 
         lo = QVBoxLayout(self)
         lo.setContentsMargins(18, 10, 18, 10)
@@ -76,17 +97,45 @@ class _ToastOverlay(QWidget):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
 
+        # Force HWND creation NOW (winId() is lazy) so WS_EX_NOACTIVATE is
+        # stamped before Qt's first ShowWindow() call.  Qt.WindowType.
+        # WindowDoesNotAcceptFocus already maps to this flag, but setting it
+        # directly via Win32 guarantees it survives any Qt style reset.
+        self._apply_noactivate()
+
+    def _apply_noactivate(self) -> None:
+        try:
+            hwnd = int(self.winId())
+            ex   = ctypes.windll.user32.GetWindowLongW(hwnd, self._GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, self._GWL_EXSTYLE, ex | self._WS_EX_NOACTIVATE)
+        except Exception:
+            pass
+
+    def showEvent(self, event) -> None:
+        # Qt re-applies window styles during its show pass; re-enforce here.
+        self._apply_noactivate()
+        event.accept()
+
+    def paintEvent(self, _) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setBrush(QBrush(self._bg_col))
+        p.setPen(QPen(self._border_col, 1))
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 6, 6)
+
     def flash(self, active: bool) -> None:
         if active:
             self._lbl.setText("● MIC ACTIVE")
-            self._lbl.setStyleSheet("color: #00e676;")
-            self.setStyleSheet(
-                "background: #0b160b; border: 1px solid #007a40; border-radius: 4px;")
+            self._lbl.setStyleSheet("background: transparent; color: #00e676;")
+            self._bg_col     = QColor(11, 22, 11, 210)
+            self._border_col = QColor("#007a40")
         else:
             self._lbl.setText("⊘ MIC MUTED")
-            self._lbl.setStyleSheet("color: #ff1744;")
-            self.setStyleSheet(
-                "background: #160505; border: 1px solid #7a0010; border-radius: 4px;")
+            self._lbl.setStyleSheet("background: transparent; color: #ff1744;")
+            self._bg_col     = QColor(22, 5, 5, 210)
+            self._border_col = QColor("#7a0010")
+        self.update()
         self.adjustSize()
         screen = QGuiApplication.primaryScreen()
         if screen:

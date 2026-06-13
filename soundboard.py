@@ -438,7 +438,14 @@ class SoundBoard:
                 if len(chunk) < n_frames:
                     out[:len(chunk)] += chunk * vol
                     if inst.loop:
-                        inst.pos = 0   # restart from beginning
+                        # Immediately fill the remainder from the start of the
+                        # loop — eliminates the up-to-10 ms silence gap that
+                        # occurred when a sound ended mid-frame.
+                        remaining = n_frames - len(chunk)
+                        fill_len  = min(remaining, len(data))
+                        out[len(chunk): len(chunk) + fill_len] += (
+                            data[:fill_len] * vol)
+                        inst.pos = fill_len
                     else:
                         done.append(inst)
                 else:
