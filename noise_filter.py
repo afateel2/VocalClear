@@ -28,6 +28,19 @@ _RNNOISE_FRAME = 480
 # Hold time after speech ends before gating kicks in (in frames)
 _HOLD_FRAMES   = 20   # 20 × 10 ms = 200 ms
 
+# Gate re-open debounce — prevents headphone bleed from reopening the gate
+# after a period of silence.  Problem: RNNoise correctly classifies leaked
+# speaker audio as speech (high speech_prob), so a single 10 ms frame above
+# vad_thresh immediately re-opens the gate and echoes friends' voices back.
+# Solution: after _LONG_SILENCE_FRAMES of gate-closed silence, require
+# _OPEN_FRAMES_STRICT consecutive frames above a stricter threshold before
+# the gate reopens.  Even in normal mode a 2-frame (20 ms) debounce is applied
+# to reject transient noise spikes.
+_LONG_SILENCE_FRAMES = 150  # 1.5 s of gate-closed silence → strict mode
+_OPEN_FRAMES         = 2    # 20 ms min sustained speech to reopen (normal)
+_OPEN_FRAMES_STRICT  = 5    # 50 ms min sustained speech after long silence
+_THRESH_BUMP_STRICT  = 0.20 # additional speech-prob margin in strict mode
+
 
 class NoiseFilter:
     # ------------------------------------------------------------------ #
@@ -48,7 +61,9 @@ class NoiseFilter:
         self._rn_state  = None    # RNNoise ctypes state pointer
         self._rn_proc   = None    # process_mono_frame callable
         self._rn_carry: np.ndarray = np.array([], dtype=np.float32)
-        self._hold_ctr: int = 0
+        self._hold_ctr:    int = 0
+        self._speech_run:  int = 0   # consecutive frames above threshold (gate closed)
+        self._silence_run: int = 0   # consecutive frames of gate-fully-closed silence
 
         self._init_backend()
 
@@ -95,6 +110,8 @@ class NoiseFilter:
             self._rn_proc      = process_mono_frame
             self._rn_carry     = np.array([], dtype=np.float32)
             self._hold_ctr     = 0
+            self._speech_run   = 0
+            self._silence_run  = 0
             self.backend       = "rnnoise"
             self.is_calibrated = True
             print("[NoiseFilter] RNNoise — AI noise suppression active")
@@ -225,20 +242,48 @@ class NoiseFilter:
             denoised_i16, speech_prob = self._rn_proc(self._rn_state, frame)
             denoised_f = denoised_i16.astype(np.float32) / 32767.0
 
-            # ── VAD gate with hold time ───────────────────────────
-            if speech_prob >= vad_thresh:
-                self._hold_ctr = _HOLD_FRAMES   # reset hold
-                chunks.append(denoised_f)
-            elif self._hold_ctr > 0:
-                self._hold_ctr -= 1
-                # Smooth fade-out over the hold window
-                fade = self._hold_ctr / _HOLD_FRAMES
-                chunks.append(denoised_f * fade)
+            # ── VAD gate with hold time and re-open debounce ──────
+            if self._hold_ctr > 0:
+                # Gate is open (fade-out countdown running).
+                self._silence_run = 0
+                if speech_prob >= vad_thresh:
+                    self._hold_ctr   = _HOLD_FRAMES   # speech detected — reset hold
+                    self._speech_run = 0
+                    chunks.append(denoised_f)
+                else:
+                    self._hold_ctr  -= 1
+                    self._speech_run = 0
+                    # Smooth fade-out so the gate close is click-free.
+                    fade = self._hold_ctr / _HOLD_FRAMES
+                    chunks.append(denoised_f * fade)
             else:
-                # Non-speech: complete silence. The 200 ms fade-out from the
-                # hold counter already smooths the transition, so hard zero
-                # here causes no clicks and prevents all speaker bleed-through.
-                chunks.append(np.zeros_like(denoised_f))
+                # Gate is fully closed.  After prolonged silence, raise the
+                # threshold and require several consecutive speech frames
+                # before reopening — headphone bleed is usually brief and
+                # lower-confidence than real user speech.
+                self._silence_run += 1
+                if self._silence_run >= _LONG_SILENCE_FRAMES:
+                    eff_thresh    = min(0.95, vad_thresh + _THRESH_BUMP_STRICT)
+                    frames_needed = _OPEN_FRAMES_STRICT
+                else:
+                    eff_thresh    = vad_thresh
+                    frames_needed = _OPEN_FRAMES
+
+                if speech_prob >= eff_thresh:
+                    self._speech_run += 1
+                    if self._speech_run >= frames_needed:
+                        # Enough sustained speech — open the gate.
+                        self._hold_ctr    = _HOLD_FRAMES
+                        self._silence_run = 0
+                        self._speech_run  = 0
+                        chunks.append(denoised_f)
+                    else:
+                        # Still accumulating — remain silent.
+                        chunks.append(np.zeros_like(denoised_f))
+                else:
+                    self._speech_run = 0
+                    # Non-speech: hard zero prevents all speaker bleed-through.
+                    chunks.append(np.zeros_like(denoised_f))
 
         if not chunks:
             return audio.copy()
