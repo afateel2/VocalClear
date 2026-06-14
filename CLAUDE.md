@@ -100,3 +100,4 @@ Critical hidden imports that MUST stay in the spec:
 - **Wiener static/glitching**: block_size=1024 + no OLA carry buffer → boundary artifacts. Fixed: block_size=4096, cross-block OLA with `_prev_input`.
 - **Echo from friends' voices**: VAD residual was 5% (leaked speaker bleed). Fixed to hard zero; VAD threshold raised.
 - **Invalid sample rate**: Hardcoded 16kHz vs VB-CABLE's 48kHz. Fixed to auto-detect.
+- **Mic echoing after silence** (VAD gate re-open): A single 10 ms frame above `vad_thresh` was enough to reopen the gate after silence. RNNoise gives high speech_prob to headphone bleed (it IS real speech, just leaked), so bleed trivially reopened the gate. Fixed with a two-stage debounce in `_process_rnnoise`: after ≥1.5 s of gate-closed silence, requires 5 consecutive frames (50 ms) above `vad_thresh + 0.20` before reopening. Even in normal mode a 2-frame (20 ms) debounce is applied. Do NOT collapse this back to single-frame threshold checks.
