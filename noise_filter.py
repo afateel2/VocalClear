@@ -41,6 +41,16 @@ _OPEN_FRAMES         = 2    # 20 ms min sustained speech to reopen (normal)
 _OPEN_FRAMES_STRICT  = 5    # 50 ms min sustained speech after long silence
 _THRESH_BUMP_STRICT  = 0.20 # additional speech-prob margin in strict mode
 
+# speech_prob alone is a spectral-shape classifier — it has no notion of
+# loudness, so quiet, clean headphone bleed can still score high confidence
+# "speech" if its spectral shape resembles a voice.  As a second, independent
+# signal, track the ambient noise floor (RMS of confirmed non-speech frames)
+# and in strict mode also require the candidate frame to be louder than that
+# floor by _RMS_MARGIN.  Direct mic speech is normally tens of dB above the
+# room/bleed floor, so this rejects bleed even when RNNoise is fooled.
+_RMS_FLOOR_ALPHA = 0.02   # EMA smoothing for the learned noise floor
+_RMS_MARGIN      = 3.0    # candidate must exceed floor by this multiple (~+9.5 dB)
+
 
 class NoiseFilter:
     # ------------------------------------------------------------------ #
@@ -61,9 +71,10 @@ class NoiseFilter:
         self._rn_state  = None    # RNNoise ctypes state pointer
         self._rn_proc   = None    # process_mono_frame callable
         self._rn_carry: np.ndarray = np.array([], dtype=np.float32)
-        self._hold_ctr:    int = 0
-        self._speech_run:  int = 0   # consecutive frames above threshold (gate closed)
-        self._silence_run: int = 0   # consecutive frames of gate-fully-closed silence
+        self._hold_ctr:    int   = 0
+        self._speech_run:  int   = 0   # consecutive frames above threshold (gate closed)
+        self._silence_run: int   = 0   # consecutive frames of gate-fully-closed silence
+        self._noise_floor_rms: float = 0.0   # learned ambient/bleed RMS floor
 
         self._init_backend()
 
@@ -112,6 +123,7 @@ class NoiseFilter:
             self._hold_ctr     = 0
             self._speech_run   = 0
             self._silence_run  = 0
+            self._noise_floor_rms = 0.0
             self.backend       = "rnnoise"
             self.is_calibrated = True
             print("[NoiseFilter] RNNoise — AI noise suppression active")
@@ -262,14 +274,28 @@ class NoiseFilter:
                 # before reopening — headphone bleed is usually brief and
                 # lower-confidence than real user speech.
                 self._silence_run += 1
-                if self._silence_run >= _LONG_SILENCE_FRAMES:
+                strict = self._silence_run >= _LONG_SILENCE_FRAMES
+                if strict:
                     eff_thresh    = min(0.95, vad_thresh + _THRESH_BUMP_STRICT)
                     frames_needed = _OPEN_FRAMES_STRICT
                 else:
                     eff_thresh    = vad_thresh
                     frames_needed = _OPEN_FRAMES
 
-                if speech_prob >= eff_thresh:
+                passes_prob = speech_prob >= eff_thresh
+
+                # Second, independent signal: speech_prob is a spectral-shape
+                # classifier with no notion of loudness, so quiet headphone
+                # bleed can still score high confidence.  In strict mode also
+                # require the raw frame to be louder than the learned ambient
+                # floor — direct mic speech is normally far above bleed level.
+                frame_rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+                if strict and self._noise_floor_rms > 1e-6:
+                    passes_rms = frame_rms >= self._noise_floor_rms * _RMS_MARGIN
+                else:
+                    passes_rms = True
+
+                if passes_prob and passes_rms:
                     self._speech_run += 1
                     if self._speech_run >= frames_needed:
                         # Enough sustained speech — open the gate.
@@ -282,6 +308,16 @@ class NoiseFilter:
                         chunks.append(np.zeros_like(denoised_f))
                 else:
                     self._speech_run = 0
+                    # Learn the ambient/bleed floor from confirmed non-speech
+                    # frames only, so the estimate stays clean.
+                    if speech_prob < vad_thresh:
+                        if self._noise_floor_rms <= 1e-6:
+                            self._noise_floor_rms = frame_rms
+                        else:
+                            self._noise_floor_rms = (
+                                _RMS_FLOOR_ALPHA * frame_rms
+                                + (1 - _RMS_FLOOR_ALPHA) * self._noise_floor_rms
+                            )
                     # Non-speech: hard zero prevents all speaker bleed-through.
                     chunks.append(np.zeros_like(denoised_f))
 
