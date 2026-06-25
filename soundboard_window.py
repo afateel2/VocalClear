@@ -38,7 +38,7 @@ C_GREEN_XLO= QColor("#001f10")
 C_AMBER    = QColor("#ffb300")
 C_RED      = QColor("#ff1744")
 C_FG       = QColor("#c8ffd4")
-C_FG_DIM   = QColor("#3a6642")
+C_FG_DIM   = QColor("#588a62")
 C_FG_MID   = QColor("#6aaa7a")
 
 FONT_MONO    = QFont("Consolas", 9)
@@ -102,7 +102,7 @@ class _ToggleBtn(QLabel):
                 "font-family: Consolas; font-size: 8pt;")
         else:
             self.setStyleSheet(
-                "background: #081208; color: #2a4a2e; padding: 3px 8px; "
+                "background: #081208; color: #4a7d52; padding: 3px 8px; "
                 "border: 1px solid #003319; font-family: Consolas; font-size: 8pt;")
 
     def mousePressEvent(self, e):
@@ -410,7 +410,7 @@ class _VolumePopup(QMainWindow):
         hdr = QWidget()
         hl  = QHBoxLayout(hdr); hl.setContentsMargins(14, 8, 14, 8)
         t   = QLabel("VOLUME"); t.setFont(FONT_MONO_H); t.setStyleSheet("color: #00e676;")
-        s   = QLabel(f"  {name}"); s.setFont(FONT_MONO_L); s.setStyleSheet("color: #3a6642;")
+        s   = QLabel(f"  {name}"); s.setFont(FONT_MONO_L); s.setStyleSheet("color: #588a62;")
         hl.addWidget(t); hl.addWidget(s); hl.addStretch()
         lo.addWidget(hdr)
         lo.addWidget(_hdivider(C_GREEN_LO))
@@ -419,7 +419,7 @@ class _VolumePopup(QMainWindow):
         bl   = QVBoxLayout(body); bl.setContentsMargins(16, 12, 16, 12); bl.setSpacing(10)
 
         row  = QHBoxLayout()
-        _l   = QLabel("LEVEL"); _l.setFont(FONT_MONO_L); _l.setStyleSheet("color: #3a6642;")
+        _l   = QLabel("LEVEL"); _l.setFont(FONT_MONO_L); _l.setStyleSheet("color: #588a62;")
         row.addWidget(_l); row.addStretch()
         self._pct = QLabel(f"{int(init_vol * 100):3d}%")
         self._pct.setFont(FONT_MONO); self._pct.setStyleSheet("color: #00e676;")
@@ -441,7 +441,7 @@ class _VolumePopup(QMainWindow):
         bl2  = QHBoxLayout(bbar); bl2.setContentsMargins(14, 8, 14, 8); bl2.addStretch()
         cancel = _SmallBtn("CANCEL", self.close,
                            color=QColor("#3a1010"), hot=QColor("#cc0030"),
-                           text_idle=QColor("#8b1a2a"))
+                           text_idle=QColor("#cc5d6a"))
         save   = _SmallBtn("SAVE",   self._save, color=C_GREEN_DIM, hot=C_GREEN)
         bl2.addWidget(cancel); bl2.addWidget(save)
         lo.addWidget(bbar)
@@ -505,7 +505,7 @@ class SoundBoardWindow(QMainWindow):
         t_board = QLabel("BOARD"); t_board.setFont(FONT_MONO_XL)
         t_board.setStyleSheet("color: #c8ffd4;")
         t_sub = QLabel("  VOCALCLEAR"); t_sub.setFont(FONT_MONO_S)
-        t_sub.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        t_sub.setStyleSheet("color: #4a7d52; letter-spacing: 1px;")
         self._header_status = QLabel("")
         self._header_status.setFont(FONT_MONO_L)
         self._header_status.setStyleSheet("color: #00e676;")
@@ -526,7 +526,7 @@ class SoundBoardWindow(QMainWindow):
         self._stop_btn = _HeaderBtn(
             "▪ STOP ALL", self._stop_all,
             color=QColor("#5a0010"), hot=QColor("#cc0030"),
-            text_idle=QColor("#8b1a2a"))
+            text_idle=QColor("#cc5d6a"))
         btn_row.addWidget(self._stop_btn)
         hdr_lo.addLayout(btn_row)
         root.addWidget(hdr)
@@ -558,7 +558,7 @@ class SoundBoardWindow(QMainWindow):
         self._sfx_pct.setStyleSheet("color: #00e676; min-width: 32px;")
         sfx_lbl = QLabel("SFX")
         sfx_lbl.setFont(FONT_MONO_S)
-        sfx_lbl.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        sfx_lbl.setStyleSheet("color: #4a7d52; letter-spacing: 1px;")
         sfx_group.addWidget(self._sfx_bar, stretch=1)
         sfx_group.addWidget(self._sfx_pct)
         sfx_group.addWidget(sfx_lbl)
@@ -578,7 +578,7 @@ class SoundBoardWindow(QMainWindow):
 
         filter_lbl = QLabel("FILTER")
         filter_lbl.setFont(FONT_MONO_S)
-        filter_lbl.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        filter_lbl.setStyleSheet("color: #4a7d52; letter-spacing: 1px;")
         s_lo.addWidget(filter_lbl)
 
         self._search_box = QLineEdit()
@@ -594,7 +594,7 @@ class SoundBoardWindow(QMainWindow):
             "  font-size: 8pt;"
             "}"
             "QLineEdit:focus { border-color: #00e676; }"
-            "QLineEdit::placeholder { color: #1a3f1a; }"
+            "QLineEdit::placeholder { color: #3d8f3d; }"
         )
         self._search_box.textChanged.connect(self._on_search)
         s_lo.addWidget(self._search_box, stretch=1)
@@ -629,7 +629,7 @@ class SoundBoardWindow(QMainWindow):
             "or  + ADD individual audio files")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setFont(FONT_MONO_L)
-        self._placeholder.setStyleSheet("color: #1a3f1a; padding: 40px;")
+        self._placeholder.setStyleSheet("color: #3d8f3d; padding: 40px;")
         self._placeholder.setWordWrap(True)
         self._grid_layout.addWidget(self._placeholder, 0, 0, 1, BTN_COLS)
 
@@ -645,7 +645,7 @@ class SoundBoardWindow(QMainWindow):
         sb_lo = QHBoxLayout(sb); sb_lo.setContentsMargins(14, 5, 14, 6)
         self._status_lbl = QLabel("Ready")
         self._status_lbl.setFont(FONT_MONO_S)
-        self._status_lbl.setStyleSheet("color: #1a3f1a;")
+        self._status_lbl.setStyleSheet("color: #3d8f3d;")
         self._playing_lbl = QLabel("")
         self._playing_lbl.setFont(FONT_MONO_S)
         self._playing_lbl.setStyleSheet("color: #00e676;")

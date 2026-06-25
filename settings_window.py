@@ -52,7 +52,7 @@ C_GREEN_LO = QColor("#004d28")
 C_AMBER    = QColor("#ffb300")
 C_RED      = QColor("#ff1744")
 C_FG       = QColor("#c8ffd4")
-C_FG_DIM   = QColor("#3a6642")
+C_FG_DIM   = QColor("#588a62")
 C_FG_MID   = QColor("#6aaa7a")
 
 FONT_MONO   = QFont("Consolas", 9)
@@ -220,7 +220,7 @@ class _ToggleBtn(QLabel):
                 "background: #00e676; color: #030603; padding: 4px 8px;")
         else:
             self.setStyleSheet(
-                "background: #0f1f0f; color: #3a6642; padding: 4px 8px;")
+                "background: #0f1f0f; color: #588a62; padding: 4px 8px;")
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self._callback:
@@ -349,7 +349,7 @@ class _PTTCaptureDialog(QMainWindow):
         hdr = QWidget()
         hdr_lo = QHBoxLayout(hdr); hdr_lo.setContentsMargins(14, 8, 14, 8)
         t = QLabel("PTT KEY"); t.setFont(FONT_MONO_H); t.setStyleSheet("color: #00e676;")
-        s = QLabel("  ·  VocalClear"); s.setFont(FONT_MONO_L); s.setStyleSheet("color: #3a6642;")
+        s = QLabel("  ·  VocalClear"); s.setFont(FONT_MONO_L); s.setStyleSheet("color: #588a62;")
         hdr_lo.addWidget(t); hdr_lo.addWidget(s); hdr_lo.addStretch()
         lo.addWidget(hdr)
         lo.addWidget(_hdivider(C_GREEN_LO))
@@ -361,10 +361,10 @@ class _PTTCaptureDialog(QMainWindow):
         self._cap_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._cap_lbl.setFont(FONT_MONO_L)
         self._cap_lbl.setStyleSheet(
-            "color: #3a6642; background: #0f1f0f; padding: 8px; border: 1px solid #004d28;")
+            "color: #588a62; background: #0f1f0f; padding: 8px; border: 1px solid #004d28;")
         body_lo.addWidget(self._cap_lbl)
         hint = QLabel("Any key or modifier combination")
-        hint.setFont(FONT_MONO_L); hint.setStyleSheet("color: #3a6642;")
+        hint.setFont(FONT_MONO_L); hint.setStyleSheet("color: #588a62;")
         body_lo.addWidget(hint)
         lo.addWidget(body)
 
@@ -515,7 +515,7 @@ class SettingsWindow(QMainWindow):
         hdr = QWidget()
         hdr_lo = QHBoxLayout(hdr); hdr_lo.setContentsMargins(16, 8, 16, 8)
         t = QLabel("SETTINGS"); t.setFont(FONT_MONO_H); t.setStyleSheet("color: #00e676;")
-        s = QLabel("  ·  VOCALCLEAR"); s.setFont(FONT_MONO); s.setStyleSheet("color: #3a6642;")
+        s = QLabel("  ·  VOCALCLEAR"); s.setFont(FONT_MONO); s.setStyleSheet("color: #588a62;")
         self._status_lbl = QLabel("● ACTIVE")
         self._status_lbl.setFont(FONT_MONO)
         self._status_lbl.setStyleSheet("color: #00e676;")
@@ -543,9 +543,9 @@ class SettingsWindow(QMainWindow):
             self.noise_filter.backend, ("UNKNOWN", "#ff1744", ""))
 
         r1 = QHBoxLayout(); r1.setSpacing(0)
-        _lbl(r1, "ENGINE ", FONT_MONO_L, "#3a6642")
+        _lbl(r1, "ENGINE ", FONT_MONO_L, "#588a62")
         _lbl(r1, b_name,   FONT_MONO,   b_col)
-        _lbl(r1, f"  {b_hint}", FONT_MONO_L, "#3a6642")
+        _lbl(r1, f"  {b_hint}", FONT_MONO_L, "#588a62")
         r1.addStretch()
         lat = QLabel(f"LATENCY  ~{self._latency_estimate()} ms")
         lat.setFont(FONT_MONO_L); lat.setStyleSheet("color: #6aaa7a;")
@@ -554,7 +554,7 @@ class SettingsWindow(QMainWindow):
 
         # Strength
         r2 = QHBoxLayout(); r2.setSpacing(0)
-        _lbl(r2, "STRENGTH", FONT_MONO_L, "#3a6642")
+        _lbl(r2, "STRENGTH", FONT_MONO_L, "#588a62")
         r2.addStretch()
         self._strength_val = QLabel(f"  {int(self.config['strength']*100):3d}%")
         self._strength_val.setFont(FONT_MONO); self._strength_val.setStyleSheet("color: #00e676;")
@@ -580,7 +580,7 @@ class SettingsWindow(QMainWindow):
         # ── Input device ──────────────────────────────────────────────────────
         scroll_lo.addWidget(_hdivider(C_GRID, margin=16))
         dev = self._card(scroll_lo)
-        _lbl_direct(dev, "INPUT DEVICE", FONT_MONO_L, "#3a6642")
+        _lbl_direct(dev, "INPUT DEVICE", FONT_MONO_L, "#588a62")
 
         inputs   = list_input_devices()
         in_names = ["System default"] + [d["name"] for d in inputs]
@@ -641,7 +641,7 @@ class SettingsWindow(QMainWindow):
         self._excl_btn.set_callback(self._on_excl_toggle)
         excl_row.addWidget(self._excl_btn)
         hint = QLabel("~3 ms · other apps cannot use mic · requires restart")
-        hint.setFont(FONT_MONO_L); hint.setStyleSheet("color: #3a6642;")
+        hint.setFont(FONT_MONO_L); hint.setStyleSheet("color: #588a62;")
         excl_row.addWidget(hint); excl_row.addStretch()
         sys_c.addLayout(excl_row)
 
@@ -649,7 +649,7 @@ class SettingsWindow(QMainWindow):
         scroll_lo.addWidget(_hdivider(C_GRID, margin=16))
         gain_c = self._card(scroll_lo)
         g_row = QHBoxLayout(); g_row.setSpacing(0)
-        _lbl(g_row, "OUTPUT GAIN", FONT_MONO_L, "#3a6642"); g_row.addStretch()
+        _lbl(g_row, "OUTPUT GAIN", FONT_MONO_L, "#588a62"); g_row.addStretch()
         self._gain_val = QLabel(f"  {self.config.get('output_gain', 1.0):.2f}×")
         self._gain_val.setFont(FONT_MONO); self._gain_val.setStyleSheet("color: #00e676;")
         g_row.addWidget(self._gain_val); gain_c.addLayout(g_row)
@@ -670,7 +670,7 @@ class SettingsWindow(QMainWindow):
                                    self.config.get("ptt_enabled", False))
         self._ptt_btn.set_callback(self._on_ptt_toggle)
         ptt_r1.addWidget(self._ptt_btn)
-        _lbl(ptt_r1, "mic only passes while key is held", FONT_MONO_L, "#3a6642")
+        _lbl(ptt_r1, "mic only passes while key is held", FONT_MONO_L, "#588a62")
         ptt_r1.addStretch(); ptt_c.addLayout(ptt_r1)
 
         ptt_r2 = QHBoxLayout(); ptt_r2.setSpacing(8)
@@ -733,7 +733,7 @@ class SettingsWindow(QMainWindow):
         if self.noise_filter.enabled:
             self._status_lbl.setText("● ACTIVE"); self._status_lbl.setStyleSheet("color: #00e676;")
         else:
-            self._status_lbl.setText("⏸ PAUSED"); self._status_lbl.setStyleSheet("color: #3a6642;")
+            self._status_lbl.setText("⏸ PAUSED"); self._status_lbl.setStyleSheet("color: #588a62;")
 
     def _check_dirty(self) -> None:
         new_input    = self._input_map.get(self._input_combo.currentText() if self._input_combo else "System default", None)

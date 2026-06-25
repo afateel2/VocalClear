@@ -47,7 +47,7 @@ C_RED       = QColor("#ff1744")
 C_RED_DIM   = QColor("#3a0010")
 
 C_FG        = QColor("#c8ffd4")
-C_FG_DIM    = QColor("#3a6642")
+C_FG_DIM    = QColor("#588a62")
 C_FG_MID    = QColor("#6aaa7a")
 
 FONT_MONO   = QFont("Consolas", 9)
@@ -335,9 +335,9 @@ class _VUMeter(QWidget):
             fm = QFontMetrics(FONT_MONO_S)
             for db_str, bar_i in (("-18", 7), ("-12", 15)):
                 tick_y = y0 + h - (bar_i + 1) * step
-                p.setPen(QPen(QColor("#1a3f1a"), 1, Qt.PenStyle.DotLine))
+                p.setPen(QPen(QColor("#3d8f3d"), 1, Qt.PenStyle.DotLine))
                 p.drawLine(x0, tick_y, x0 + w, tick_y)
-                p.setPen(QColor("#1a3f1a"))
+                p.setPen(QColor("#3d8f3d"))
                 tw = fm.horizontalAdvance(db_str)
                 p.drawText(x0 + w - tw - 1, tick_y + step - 1, db_str)
 
@@ -376,13 +376,13 @@ class _HistoryGraph(QWidget):
 
         # Subtle dB reference labels
         p.setFont(FONT_MONO_S)
-        p.setPen(QColor("#1a3f1a"))
+        p.setPen(QColor("#3d8f3d"))
         for db, frac in (("-12", 0.22), ("-24", 0.50), ("-48", 0.88)):
             y = int(frac * (ch - 4)) + 2
             p.drawText(2, y + 8, db)
             p.setPen(QPen(QColor("#112211"), 1, Qt.PenStyle.DashLine))
             p.drawLine(18, y, cw, y)
-            p.setPen(QColor("#1a3f1a"))
+            p.setPen(QColor("#3d8f3d"))
 
         n = len(self._in_hist)
         if n < 2:
@@ -480,13 +480,13 @@ class _InfoCard(QWidget):
         r1 = QHBoxLayout(); r1.setSpacing(6)
         lbl_key = QLabel("ENGINE")
         lbl_key.setFont(FONT_MONO_S)
-        lbl_key.setStyleSheet("color: #3a6642; letter-spacing: 1px;")
+        lbl_key.setStyleSheet("color: #588a62; letter-spacing: 1px;")
         b_name, b_fg, b_bg, b_hint = _ENGINE_META.get(
             self._nf.backend, ("UNKNOWN", "#ff1744", "#2a000a", ""))
         badge = _Badge(b_name, b_fg, b_bg)
         lbl_hint = QLabel(b_hint)
         lbl_hint.setFont(FONT_MONO_S)
-        lbl_hint.setStyleSheet("color: #3a6642;")
+        lbl_hint.setStyleSheet("color: #588a62;")
         for w in (lbl_key, badge, lbl_hint): r1.addWidget(w)
         r1.addStretch()
         lo.addLayout(r1)
@@ -495,7 +495,7 @@ class _InfoCard(QWidget):
         r2 = QHBoxLayout(); r2.setSpacing(6)
         lbl_out_key = QLabel("OUTPUT")
         lbl_out_key.setFont(FONT_MONO_S)
-        lbl_out_key.setStyleSheet("color: #3a6642; letter-spacing: 1px;")
+        lbl_out_key.setStyleSheet("color: #588a62; letter-spacing: 1px;")
         self._out_lbl = QLabel(self._engine.output_device_name or "detecting…")
         self._out_lbl.setFont(FONT_MONO_L)
         self._out_lbl.setStyleSheet("color: #6aaa7a;")
@@ -507,7 +507,7 @@ class _InfoCard(QWidget):
         r3 = QHBoxLayout(); r3.setSpacing(6)
         lbl_lat_key = QLabel("LATENCY")
         lbl_lat_key.setFont(FONT_MONO_S)
-        lbl_lat_key.setStyleSheet("color: #3a6642; letter-spacing: 1px;")
+        lbl_lat_key.setStyleSheet("color: #588a62; letter-spacing: 1px;")
         self._lat_lbl = QLabel("measuring…")
         self._lat_lbl.setFont(FONT_MONO_L)
         self._lat_lbl.setStyleSheet("color: #6aaa7a;")
@@ -582,7 +582,7 @@ class _StatusChip(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r    = self.rect().adjusted(0, 1, -1, -1)
         text = "ACTIVE" if self._active else "PAUSED"
-        fg   = QColor("#00e676") if self._active else QColor("#3a6642")
+        fg   = QColor("#00e676") if self._active else QColor("#588a62")
         bg   = QColor("#001f10") if self._active else QColor("#0d0d0d")
         bord = QColor("#007a40") if self._active else QColor("#222222")
 
@@ -676,7 +676,7 @@ class MainWindow(QMainWindow):
             else:
                 self._mute_btn.set_text("MUTE")
                 self._mute_btn.set_colors(
-                    base=QColor("#3a0010"), hot=QColor("#cc0030"), idle_text=QColor("#8b1a2a"))
+                    base=QColor("#3a0010"), hot=QColor("#cc0030"), idle_text=QColor("#cc5d6a"))
 
     def refresh_output_device(self) -> None:
         QTimer.singleShot(0, self._do_refresh_output)
@@ -720,7 +720,7 @@ class MainWindow(QMainWindow):
 
         lbl_sub = QLabel("  AI NOISE SUPPRESSION")
         lbl_sub.setFont(FONT_MONO_S)
-        lbl_sub.setStyleSheet("color: #2a4a2e; letter-spacing: 1px;")
+        lbl_sub.setStyleSheet("color: #4a7d52; letter-spacing: 1px;")
 
         self._status_chip = _StatusChip()
         self._status_chip.set_active(self.noise_filter.enabled)
@@ -729,7 +729,7 @@ class MainWindow(QMainWindow):
         self._ptt_chip.setFont(FONT_MONO_S)
         self._ptt_chip.setContentsMargins(6, 2, 6, 2)
         self._ptt_chip.setStyleSheet(
-            "color: #3a6642; background: #0b160b; border: 1px solid #004d28; padding: 2px 6px;")
+            "color: #588a62; background: #0b160b; border: 1px solid #004d28; padding: 2px 6px;")
         self._ptt_chip.hide()
 
         self._mute_chip = QLabel("⊘ MUTED")
@@ -774,7 +774,7 @@ class MainWindow(QMainWindow):
         db_row.addStretch()
         self._db_lbl = QLabel("")
         self._db_lbl.setFont(FONT_MONO_S)
-        self._db_lbl.setStyleSheet("color: #3a6642;")
+        self._db_lbl.setStyleSheet("color: #588a62;")
         db_row.addWidget(self._db_lbl)
         db_row.addStretch()
         vu_lo.addLayout(db_row)
@@ -799,7 +799,7 @@ class MainWindow(QMainWindow):
         hist_hdr = QHBoxLayout()
         hist_lbl = QLabel("SIGNAL HISTORY")
         hist_lbl.setFont(FONT_MONO_S)
-        hist_lbl.setStyleSheet("color: #1a3f1a; letter-spacing: 1px;")
+        hist_lbl.setStyleSheet("color: #3d8f3d; letter-spacing: 1px;")
         hist_hdr.addWidget(hist_lbl)
         hist_hdr.addStretch()
         hist_lo.addLayout(hist_hdr)
@@ -834,7 +834,7 @@ class MainWindow(QMainWindow):
             "cross", "MUTE", self._on_mute,
             base_color=QColor("#3a0010"),
             hot_color =QColor("#cc0030"),
-            text_idle =QColor("#8b1a2a"),
+            text_idle =QColor("#cc5d6a"),
         )
         btn_lo.addWidget(self._mute_btn)
 
@@ -866,7 +866,7 @@ class MainWindow(QMainWindow):
             "cross", "QUIT", self._confirm_and_quit,
             base_color=QColor("#5a0010"),
             hot_color =QColor("#cc0030"),
-            text_idle =QColor("#8b1a2a"),
+            text_idle =QColor("#cc5d6a"),
         )
         bot_lo.addWidget(quit_btn)
         root.addWidget(bot)
@@ -984,7 +984,7 @@ class MainWindow(QMainWindow):
                 else:
                     self._ptt_chip.setText("○ PTT")
                     self._ptt_chip.setStyleSheet(
-                        "color: #3a6642; background: #0b160b; "
+                        "color: #588a62; background: #0b160b; "
                         "border: 1px solid #004d28; padding: 2px 6px;")
             else:
                 self._ptt_chip.hide()
@@ -1020,7 +1020,7 @@ class MainWindow(QMainWindow):
                     f"IN  {_rms_to_db(in_rms):+.1f} dB       OUT  {_rms_to_db(out_rms):+.1f} dB"
                     f"   ⚠ xrun")
             else:
-                self._db_lbl.setStyleSheet("color: #3a6642;")
+                self._db_lbl.setStyleSheet("color: #588a62;")
                 self._db_lbl.setText(
                     f"IN  {_rms_to_db(in_rms):+.1f} dB       OUT  {_rms_to_db(out_rms):+.1f} dB")
         self._tick_count += 1
