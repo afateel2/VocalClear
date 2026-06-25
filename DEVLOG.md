@@ -84,10 +84,13 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `_draw_channel(db_ticks=True)` on the OUT channel: dotted reference lines + dim labels  
   at −18 dB (bar 7) and −12 dB (bar 15) drawn right-justified inside the channel.
 
-- [⏸] **Keyboard shortcut: global pause/resume toggle** *(blocked — needs user input)*  
-  Implementation: Win32 `RegisterHotKey(hwnd, id, MOD_CTRL|MOD_SHIFT, vk)` in a thread that  
-  calls `PeekMessage` for `WM_HOTKEY`. The key combo cannot be chosen autonomously — ask the  
-  user what key they want before implementing.
+- [x] **Keyboard shortcut: global pause/resume toggle** *(done — shipped as mute/unmute toggle, not via RegisterHotKey)*  
+  Actual implementation differs from the plan above: R-CTRL+`\` polled via `QTimer` calling  
+  `GetAsyncKeyState` every 50 ms on the Qt main thread (`tray_app.py::_check_toggle_hotkey`),  
+  not `RegisterHotKey`/`WM_HOTKEY`. Pairs with `_ToastOverlay` (screen-corner toast) and a  
+  `winsound.Beep` audio cue. This polling pattern is proven safe and is the template to reuse  
+  for any future hotkey (e.g. soundboard sound-trigger hotkeys, see backlog below) — simpler  
+  than `RegisterHotKey` and avoids needing a native event filter.
 
 - [x] **CPU/latency live readout** *(done session 006)*  
   `engine.process_time_ms` is a 10-sample rolling average of `noise_filter.process()` wall time  
@@ -157,9 +160,128 @@ Items are ordered by priority. Check off and move to the relevant session entry 
   `_tooltip()` now appends the current input dB (e.g. "| −18 dB"); called by the watchdog  
   timer every 5 s so the tooltip stays fresh without a separate timer.
 
+- [ ] **Software AGC/leveler** *(researched session 008, not implemented — see FEATURE_IDEAS.md)*  
+  RMS gain-follower applied post-noise-suppression, pre-output. Small, well-established DSP,  
+  no new dependency. Awaiting user go-ahead.
+
+- [ ] **True acoustic echo cancellation (AEC)** *(researched session 008, not implemented — see  
+  FEATURE_IDEAS.md)* High-risk/high-effort: no maintained pip-installable Windows AEC3/Speex  
+  binding without a C compiler, and no WASAPI loopback support in `sounddevice` to capture the  
+  reference signal it needs. Do not start without explicit user sign-off.
+
+- [ ] **Soundboard hotkeys v2** *(researched session 008, not implemented — see  
+  FEATURE_IDEAS.md)* The original hotkey feature was removed for a Tk-specific deadlock  
+  (`AppHangB1`) that no longer applies post-PySide6-migration. The existing  
+  `_check_toggle_hotkey` `QTimer`-polling pattern in `tray_app.py` is already proven safe and  
+  reusable for this.
+
+- [ ] **Bleed/echo live indicator** *(researched session 008, not implemented — see  
+  FEATURE_IDEAS.md)* Surface the VAD instrumentation added in session 008 (strict-mode  
+  blocks, noise-floor margin) to the main window UI so the user gets visual feedback instead  
+  of relying on friends to notice.
+
 ---
 
 ## Session Log
+
+> **Note (2026-06-26):** Sessions 001–007 below predate a long stretch of regular (non-loop)  
+> development covering many features and fixes not logged in this format — mute/unmute,  
+> PTT, output gain, window snapping, soundboard export/import, the full PySide6 polish pass,  
+> and more. See `git log` for the authoritative history of that period; this file resumes  
+> loop-session logging below rather than backfilling it.
+
+---
+
+### Session 008 — 2026-06-26 (mic-echo investigation + broad improvement pass)
+
+**Goal:** Root-cause a recurring "mic echoes friends' voices after silence" report, fix what's  
+fixable in software, then use idle time (user waiting for friends to test) for a bug/perf/UI/UX  
+pass and feature research.
+
+**Done:**
+- Root-caused the echo report through elimination, not guesswork: confirmed `rnnoise` is the  
+  active backend (not stale builds — both the desktop shortcut and the Windows `Run` registry  
+  key launch `pythonw.exe main.py` from source, never the 3-month-stale `dist\` exe); ruled out  
+  WASAPI sample-rate mismatch (fails loudly, never silently corrupts); identified the user's  
+  headset (Drop+Sennheiser PC38X) is **open-back** (leaks audio by design, no companion app/  
+  onboard DSP) and their Windows mic **Boost was +20.0 dB** on top of level 74/100 — likely  
+  amplifying the acoustic leak past where any VAD can tell it apart from real speech.
+- Added a second, independent VAD-gate signal: in strict mode (after `_LONG_SILENCE_FRAMES`),  
+  also require the raw frame's RMS to exceed a learned ambient/bleed noise floor by `_RMS_MARGIN`  
+  (3x, ~+9.5 dB) — patches the gap where RNNoise's `speech_prob` (spectral-shape only, no  
+  loudness awareness) gets fooled by clean bleed. See `noise_filter.py::_process_rnnoise`.
+- Hardened `noise_filter.process()` against clipped input (samples past ±1.0, plausible given  
+  high mic Boost): `pyrnnoise.process_mono_frame` silently skips its int16 conversion when input  
+  is out of range and then asserts; that exception was being caught by `_stream_callback` but  
+  set `last_error`, which the watchdog saw as a stream fault and triggered a full **engine  
+  restart** (audible glitch) for what should be a harmless clipped sample. Now clips to [-1, 1]  
+  first when out of range (only allocates when actually needed — checked via cheap min/max scan).
+- Perf: replaced unconditional `.astype(np.float32)` copies with `np.asarray(..., dtype=...)`  
+  (no-copy when already float32) on the per-block audio hot path in `audio_engine.py` and  
+  `noise_filter.py`; removed two fully-redundant double-casts. Verified via a synthetic  
+  300-block smoke test through the real `pyrnnoise` backend (not just `ast.parse`).
+- UI/UX: computed actual WCAG 2.2 contrast ratios (not eyeballed) for every "dim" text color  
+  against the specific backgrounds it appears on. Three of them were failing badly (ratios  
+  1.5–2.0 — effectively invisible, not just intentionally muted) for text that's actually read  
+  (field labels, hints, idle-state button labels). Replaced with minimal hue-matched lighter  
+  variants that clear AA while preserving the dim/secondary visual weight. See commit  
+  `d7a6288` for the exact before/after hex values and which Qt widgets use them.
+- Fixed stale docs in `CLAUDE.md`: it said tkinter (actual: PySide6 throughout, migrated long  
+  ago) and `block_size` default 4096 (actual default is 480, matching the RNNoise frame size  
+  exactly — the "1024 → 4096" migration note was simply wrong/outdated).
+- Researched (not implemented) two larger feature candidates via a background agent — see  
+  `FEATURE_IDEAS.md`: true AEC (acoustic echo cancellation, the structurally-correct fix for  
+  the echo problem) is high-risk/high-effort on this stack — no maintained, pip-installable  
+  Windows AEC3/Speex binding without a C compiler, and `sounddevice`'s WASAPI backend has no  
+  loopback-capture support (open `python-sounddevice` issue #281) so there's no clean way to  
+  even get the reference signal it would need. A software AGC/leveler (RMS gain-follower,  
+  post-noise-suppression) is the opposite: small, well-established DSP, no new dependency,  
+  and would let the user turn off the Windows mic Boost that's the likely actual trigger.
+
+**Problems:**
+- Hit a *different*, pre-existing crash while the user was testing (`PaErrorCode -9984`,  
+  "Incompatible host API specific stream info"). Confirmed via log timestamps this is NOT  
+  caused by anything in this session — identical error appears on 2026-06-05 and 2026-06-20,  
+  long before today. It's the known flaky WASAPI-exclusive negotiation timing issue already  
+  documented above ("Stream restart... WASAPI needs time to release"). Workaround: toggle  
+  `wasapi_exclusive` off in Settings if it blocks testing.
+- My first attempted smoke test of the RNNoise pipeline failed with an `AssertionError` deep  
+  inside `pyrnnoise` — turned out to be my own synthetic test data occasionally exceeding  
+  ±1.0 (Gaussian noise has unbounded tails), not a real bug — but tracing *why* it failed is  
+  exactly what surfaced the clip-hardening issue above, which **is** real and relevant given  
+  this specific user's high mic Boost. Worth remembering: a "broken test" is sometimes pointing  
+  at a real edge case, not just bad test data — check both before dismissing either.
+
+**Research / Key Facts:**
+- `np.asarray(x, dtype=np.float32)` vs `x.astype(np.float32)`: identical output, but `asarray`  
+  skips the copy when `x` is already the target dtype; `astype` always copies unless you pass  
+  `copy=False` explicitly. Worth defaulting to `asarray` for cast-only hot-path code generally.
+- PortAudio device indices (as returned by `sounddevice.query_devices()`) are **not stable**  
+  across reboots/driver updates/device hot-plug — confirmed by observing the same index (33)  
+  point to a completely different, output-only device in this session vs. presumably whenever  
+  the user last picked it in Settings. `config.json` stores the raw integer index. Low-confidence  
+  but real latent fragility — not the active root cause here (the user confirmed via Settings UI  
+  the actual selection was correct), but worth remembering if device selection ever silently  
+  breaks after a Windows update. A name-based or persistent-ID-based device match (with index  
+  as a fallback hint) would be more robust than a bare index — not worth doing speculatively,  
+  but worth reaching for if this surfaces as a real complaint later.
+- `python-sounddevice` has no WASAPI loopback support (open issue #281); `PyAudioWPatch` (a  
+  PyAudio fork) is the common workaround used by other projects needing Windows loopback  
+  capture. Relevant if AEC or any "hear what's being played back" feature is ever greenlit.
+- `pyrnnoise.process_mono_frame`'s float→int16 conversion is conditional  
+  (`if dtype in (float32,float64) and -1<=min and max<=1`) and falls through to an `assert`  
+  if the condition is false — i.e. it has no defensive clamp of its own. Any caller passing  
+  audio that could exceed [-1,1] must clip before calling it; this project's high-Boost user  
+  is exactly the scenario where that assumption could break in the real world, not just in  
+  theory.
+
+**Next session should do:** Wait for the user's test results (lowering mic Boost to 0dB,  
+disabling Windows audio enhancements, relaunching). If the echo persists even with Boost at  
+0dB and a fresh relaunch, the next real investigative step is prototyping the AGC/leveler  
+(small, low-risk, see `FEATURE_IDEAS.md`) so the user has a path to keep their needed loudness  
+without hardware Boost amplifying whatever bleed remains. Do not start on AEC without an  
+explicit go-ahead — it's a multi-day architecture change with real dependency/feasibility risk,  
+not a tuning change.
 
 ---
 
