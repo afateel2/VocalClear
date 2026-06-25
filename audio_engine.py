@@ -356,7 +356,9 @@ class AudioEngine:
 
     def _to_out(self, mono: np.ndarray) -> np.ndarray:
         """Shape a mono float32 array into (frames, _out_channels) for outdata."""
-        mono = mono.astype(np.float32)
+        # np.asarray only copies if mono isn't already float32 — callers on the
+        # hot path already pass float32, so this is normally a no-copy cast.
+        mono = np.asarray(mono, dtype=np.float32)
         if self._out_channels == 1:
             return mono.reshape(-1, 1)
         return np.column_stack([mono, mono])
@@ -365,9 +367,9 @@ class AudioEngine:
         """Add soundboard frame to mic audio. Returns float32 mono array."""
         sb = self._soundboard
         if sb is None:
-            return mic.astype(np.float32)
+            return np.asarray(mic, dtype=np.float32)
         sfx = sb.get_mix_frame(n)
-        mixed = mic.astype(np.float32) + sfx
+        mixed = np.asarray(mic, dtype=np.float32) + sfx
         # Soft clip to prevent clipping when SFX is loud
         np.tanh(mixed, out=mixed)
         return mixed

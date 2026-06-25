@@ -167,7 +167,17 @@ class NoiseFilter:
 
     def process(self, audio: np.ndarray) -> np.ndarray:
         """Process one block of mono float32 audio. Same length returned."""
-        audio = audio.astype(np.float32)
+        # np.asarray only copies if audio isn't already float32 — the audio
+        # engine's hot path always passes float32, so this is normally free.
+        audio = np.asarray(audio, dtype=np.float32)
+        # Defensive clip: a hot mic (e.g. high Windows "Boost" gain) can
+        # occasionally produce samples just past +/-1.0.  pyrnnoise's int16
+        # conversion silently skips out-of-range frames and then asserts,
+        # which the audio callback catches — but that sets last_error, which
+        # the watchdog sees as a stream fault and restarts the whole engine
+        # (audible glitch) over what should be a harmless clipped sample.
+        if audio.size and (audio.min() < -1.0 or audio.max() > 1.0):
+            audio = np.clip(audio, -1.0, 1.0)
         if not self.enabled:
             return audio.copy()
         if self.backend == "deepfilter":
@@ -234,7 +244,8 @@ class NoiseFilter:
 
     def _process_rnnoise(self, audio: np.ndarray) -> np.ndarray:
         # Carry is float32 in [-1, 1]; process_mono_frame handles int16 scaling.
-        combined  = np.concatenate([self._rn_carry, audio.astype(np.float32)])
+        # audio is already float32 here — process() casts it before dispatch.
+        combined  = np.concatenate([self._rn_carry, audio])
         n_full    = (len(combined) // _RNNOISE_FRAME) * _RNNOISE_FRAME
         self._rn_carry = combined[n_full:].copy()
 
@@ -289,7 +300,7 @@ class NoiseFilter:
                 # bleed can still score high confidence.  In strict mode also
                 # require the raw frame to be louder than the learned ambient
                 # floor — direct mic speech is normally far above bleed level.
-                frame_rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+                frame_rms = float(np.sqrt(np.mean(frame ** 2)))  # frame is already float32
                 if strict and self._noise_floor_rms > 1e-6:
                     passes_rms = frame_rms >= self._noise_floor_rms * _RMS_MARGIN
                 else:
