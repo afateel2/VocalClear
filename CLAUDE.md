@@ -5,9 +5,80 @@ Real-time microphone noise suppression for Windows. Runs as a system tray app an
 ## How to Run
 
 ```bash
-pythonw main.py          # silent launch (no console window) — goes to tray
+"%USERPROFILE%\.vocalclear\bin\VocalClear.exe" main.py   # intended fix — see open issue below, not yet confirmed working
+pythonw main.py          # silent launch (shows as "Python" in Task Manager)
 python main.py           # with console — useful for debugging
 ```
+
+## Process Identity Launcher (`windows_identity.py`) — attempted fix, NOT yet working
+
+**Status: OPEN PROBLEM.** Task Manager still displays the process as "Python" even after this
+launcher was built and wired in. Do not assume this is solved — see the Open Investigation
+section below before touching this again.
+
+Task Manager's name column comes from the **version-info resource of the exe hosting the
+process** — running via pythonw.exe always shows "Python"; no install/shortcut/AUMID changes
+that. Attempted fix (2026-07-04): `windows_identity.py` builds a self-contained launcher at
+`%USERPROFILE%\.vocalclear\bin\`:
+- `VocalClear.exe` — byte copy of pythonw.exe with VERSIONINFO (FileDescription="VocalClear")
+  and icon-group resources rewritten via Win32 `UpdateResource` (ctypes; note: explicit
+  `restype`/`argtypes` are mandatory or 64-bit HANDLEs truncate → error 87)
+- `python312.dll`/`python3.dll`/`vcruntime140*.dll` copied beside it (loader searches exe dir)
+- `VocalClear._pth` + `python312._pth` — bake the real install's `sys.path` (embeddable-distro
+  mechanism); regenerate by running `python windows_identity.py` from the real interpreter
+- `source.json` — records the source install for staleness checks
+
+The Run registry key, the desktop shortcut, and `config.set_startup` all point at this
+launcher. `main.py` refreshes it best-effort on startup (daemon thread; no-op unless Python
+was upgraded; silently skips if the exe is locked by the running instance). C:\Python312 is
+NOT writable without elevation — that's why the launcher lives in the user profile.
+
+### Open Investigation — Task Manager still shows "Python" (2026-07-11+)
+
+User reports Task Manager continues to display the running process as "Python" after this
+launcher was built, `FileDescription` was verified correct on the exe itself, and the Run
+registry key + desktop shortcut were both repointed at `VocalClear.exe`.
+
+**What was actually verified working (do not re-verify, these are confirmed facts):**
+- `windows_identity.ensure_launcher()` successfully builds `%USERPROFILE%\.vocalclear\bin\VocalClear.exe`.
+- Reading the built exe's `FileDescription` back via `version.dll` (`GetFileVersionInfoW`/
+  `VerQueryValueW`) returns `"VocalClear"`.
+- `(Get-Item VocalClear.exe).VersionInfo.FileDescription` in PowerShell independently confirms
+  `"VocalClear"` on the same file.
+- The launcher successfully imports the full app dependency stack (numpy, sounddevice,
+  soundfile, PySide6) — it is not a broken/non-functional copy.
+- Registry `HKCU\...\Run\VocalClear` and the desktop `.lnk` were both updated to point at
+  `VocalClear.exe`, confirmed by reading them back.
+
+**What is NOT yet confirmed — likely where the real bug is:**
+- Whether the user's running process, at the moment they checked Task Manager, was actually
+  hosted by the new `VocalClear.exe` rather than a stale `pythonw.exe` instance started before
+  the fix (a leftover `pythonw.exe` process was observed still running at the end of the prior
+  session — PID 6592 — and the user was told to quit-from-tray and relaunch; not confirmed
+  whether that relaunch happened via the updated shortcut specifically, vs. Start Menu search,
+  a pinned taskbar icon, or some other stale launch path that might not have been repointed).
+- Whether the exe actually launches successfully at all in practice — a byte-patched, unsigned
+  copy of `pythonw.exe` could be silently blocked or altered by Windows Defender / SmartScreen
+  / AV real-time protection, which would not necessarily surface as a visible error if something
+  upstream falls back silently.
+- Whether Task Manager's simple "Processes" tab (grouped/friendly view) actually sources its
+  name the same way the "Details" tab / `version.dll` does — this was assumed based on general
+  Win32 behavior but never directly confirmed against Task Manager's actual rendering on this
+  machine. The Details tab's "Description" column is the more reliable thing to check next,
+  as a way to isolate whether this is a resource problem (would fail there too) or a
+  Task-Manager-simple-view-specific quirk (would show correctly there but not in Processes).
+- Whether Windows Shell/Task Manager caching (icon cache, running-app identity cache) from the
+  years of `pythonw.exe` being launched under this exact AppUserModelID is holding onto a stale
+  "Python" association that a plain relaunch doesn't invalidate — would need first-principles
+  testing (fresh reboot, or `taskkill` + Explorer restart) to rule in or out.
+
+**Next session should:** get the user to (1) fully quit VocalClear from the tray, confirm via
+Task Manager's Details tab that no `pythonw.exe`/`VocalClear.exe` process remains, (2) launch
+strictly via the Desktop shortcut, (3) check BOTH the Processes tab name AND the Details tab
+Description column, and report what each shows — that single data point determines whether this
+is a resource/build problem (fix code) or a caching/stale-process problem (no code change
+needed, just a clean relaunch procedure). Do not modify `windows_identity.py` again until that
+diagnostic step narrows down which of the two failure modes above is actually occurring.
 
 ## How to Build (PyInstaller exe)
 
@@ -103,12 +174,16 @@ Critical hidden imports that MUST stay in the spec:
 
 ## Bugs Fixed (Historical — don't re-introduce)
 
+- **Cross-thread `QTimer.singleShot(0, fn)` without a context object**: from a plain Python thread the 2-arg form does NOT queue onto the Qt main thread (Qt creates the temp receiver in the *calling* thread — the functor runs on the worker thread, or never). Always use the 3-arg form with a main-thread QObject: `QTimer.singleShot(0, ctx, fn)`. All sites fixed in session 009 (2026-07-04).
+
 - **AppHangB1 on soundboard hotkeys**: `wait_window()` inside Tk event callback nested event loop → deadlock. Fixed by removing hotkey feature entirely.
 - **Wiener static/glitching**: block_size=1024 + no OLA carry buffer → boundary artifacts. Fixed: block_size=4096, cross-block OLA with `_prev_input`.
 - **Echo from friends' voices**: VAD residual was 5% (leaked speaker bleed). Fixed to hard zero; VAD threshold raised.
 - **Invalid sample rate**: Hardcoded 16kHz vs VB-CABLE's 48kHz. Fixed to auto-detect.
 - **Mic echoing after silence** (VAD gate re-open): A single 10 ms frame above `vad_thresh` was enough to reopen the gate after silence. RNNoise gives high speech_prob to headphone bleed (it IS real speech, just leaked), so bleed trivially reopened the gate. Fixed with a two-stage debounce in `_process_rnnoise`: after ≥1.5 s of gate-closed silence, requires 5 consecutive frames (50 ms) above `vad_thresh + 0.20` before reopening. Even in normal mode a 2-frame (20 ms) debounce is applied. Do NOT collapse this back to single-frame threshold checks.
-- **Mic echoing after silence, round 2** (amplitude-relative floor): the debounce above wasn't fully sufficient because `speech_prob` is a spectral-shape classifier with no notion of loudness — quiet headphone bleed that resembles speech spectrally still scored high confidence. Added a second, independent gate signal: in strict mode, also require the raw frame's RMS to exceed a learned ambient/bleed noise floor (`_noise_floor_rms`, slow EMA over confirmed non-speech frames) by `_RMS_MARGIN` (3x, ~+9.5 dB). Root-caused on the user's machine to an **open-back headset (Drop+Sennheiser PC38X) leaking audio acoustically by design, stacked with a +20 dB Windows mic Boost** amplifying that leak to speech-like loudness — see test plan below. This headset has no companion app/onboard DSP; all gain knobs are Windows/Realtek driver settings, not firmware.
+- **Mic echoing after silence, round 2** (amplitude-relative floor): the debounce above wasn't fully sufficient because `speech_prob` is a spectral-shape classifier with no notion of loudness — quiet headphone bleed that resembles speech spectrally still scored high confidence. Added a second, independent gate signal: in strict mode, also require the raw frame's RMS to exceed a learned ambient/bleed noise floor (`_noise_floor_rms`) by `_RMS_MARGIN` (3x, ~+9.5 dB). Root-caused on the user's machine to an **open-back headset (Drop+Sennheiser PC38X) leaking audio acoustically by design, stacked with a +20 dB Windows mic Boost** amplifying that leak to speech-like loudness — see test plan below. This headset has no companion app/onboard DSP; all gain knobs are Windows/Realtek driver settings, not firmware. **User confirmed the echo fixed on 2026-07-11.**
+
+- **Mic dead for the first seconds after silence** (strict-gate lockout, fixed 2026-07-11): the amplitude floor above was originally a plain EMA over all low-`speech_prob` frames. Breaths and unvoiced fricatives (s/f/sh) are LOUD but score low speech-probability, so speaking into a closed gate inflated the floor toward speech level — the 3× RMS check then rejected the user's own voice, and whole utterances were swallowed until a few seconds of silence decayed the floor back down (reproduced deterministically in simulation; boost/strength changes can't help because it's a ratio test). Fixed by making the floor a **minimum statistic**: adapt down fast (`_RMS_FLOOR_ALPHA_DOWN`), drift up slowly (`_RMS_FLOOR_ALPHA_UP`), and NEVER learn from frames louder than `_RMS_FLOOR_LEARN_CAP`(2×) the current floor. Also `_speech_run` now decays by 2 on a failing frame instead of hard-resetting, so one 10 ms dip (stop consonant) doesn't erase a reopen run. Do NOT revert the floor to a plain EMA and do NOT restore the hard reset — quiet-bleed blocking was verified intact with both changes.
 
 ## Open Investigation — Mic Echo After Silence (2026-06-25)
 
@@ -122,6 +197,6 @@ User reports mic picks up and echoes friends' voices specifically after a period
 
 **Ruled out during investigation:** stale PyInstaller exe (both desktop shortcut and Windows startup registry launch `pythonw.exe main.py` from source, confirmed via `reg query`/shortcut inspection — never the exe), WASAPI sample-rate mismatch silently corrupting audio (PortAudio/WASAPI fails loudly on real mismatches, never silently resamples in exclusive mode), DeepFilterNet being the active backend (not installed; `rnnoise` confirmed active via log).
 
-**Still open / not yet verified:** whether lowering Boost and/or relaunching actually fixes the symptom for the user. If the symptom *persists* even after Boost is at 0 dB, audio enhancements are off, and the app has been relaunched with current source, the next investigative step is **true acoustic echo cancellation (AEC) with a reference signal** — capturing what's being sent to CABLE Input as a reference and subtracting correlated content from the mic signal — since a VAD-only approach has a structural ceiling it cannot exceed (confirmed via research: this is exactly how Discord/Krisp and NVIDIA Broadcast solve this, and a VAD classifier alone cannot replicate it because it never sees the playback signal). This would be a substantial architecture addition, not a tuning change — do not attempt without confirming the cheaper fixes above were exhausted first.
+**RESOLVED (2026-07-11):** the user confirmed the echo is fixed (after lowering Boost from +20 to +10 dB with the two VAD fixes active). The follow-on regression — mic swallowing the first utterance after silence — was root-caused to floor-poisoning and fixed the same day (see Bugs Fixed above). Kept for history: if echo ever *returns*, the next investigative step is **true acoustic echo cancellation (AEC) with a reference signal** — capturing what's being sent to CABLE Input as a reference and subtracting correlated content from the mic signal — since a VAD-only approach has a structural ceiling it cannot exceed (confirmed via research: this is exactly how Discord/Krisp and NVIDIA Broadcast solve this, and a VAD classifier alone cannot replicate it because it never sees the playback signal). This would be a substantial architecture addition, not a tuning change — do not attempt without confirming the cheaper fixes above were exhausted first.
 
 **Also flagged but not yet re-verified:** `config.json`'s `input_device` index can drift after reboots/driver updates because PortAudio device indices are not stable identifiers — when checked on 2026-06-25, index 33 momentarily enumerated as an output-only device ("Headphones (Realtek HD Audio 2nd output)", 0 input channels) on this machine, though the user confirmed via Settings UI that the actual selected device shown was correct ("System default", matching their headset). Low-confidence finding, included for completeness — not the active root cause, but a latent fragility worth remembering if input device selection ever silently breaks after a Windows update.

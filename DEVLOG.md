@@ -192,6 +192,143 @@ Items are ordered by priority. Check off and move to the relevant session entry 
 
 ---
 
+### Session 010 — 2026-07-11 (mic-dropout after silence: strict-gate lockout)
+
+**Goal:** User confirms the echo is FIXED, but reports a new symptom: sometimes speech produces
+no output at all, and waiting a few seconds then speaking again makes it work. Troubleshoot.
+
+**Root cause (reproduced deterministically before fixing):** the amplitude-relative noise floor
+added in session 008 was a plain EMA over all frames with `speech_prob < vad_thresh`. Breaths
+and unvoiced fricatives (s/f/sh) are loud but spectrally noise-like → low speech_prob → they
+fed the floor. Speaking into a closed strict-mode gate therefore inflated the floor toward
+speech level, and the 3× RMS reopen check started rejecting the user's own voice — a
+self-locking feedback loop. A few seconds of silence decayed the EMA back down, which is
+exactly the user's "wait then retry" workaround. Boost/strength changes can't help: both sides
+of the comparison scale together (ratio test). Simulation (stubbed `_rn_proc`, controlled
+prob/RMS): 2 s quiet → 300 ms breath → 1 s confident speech = **entire utterance swallowed**;
+after 3 s wait, retry opens in 40 ms. Log ruled out watchdog restarts; config ruled out the
+session-009 FIFO (block_size=480 → pass-through) and PTT (disabled).
+
+**Fix (`noise_filter.py`):**
+- Floor is now a **minimum statistic**: `_RMS_FLOOR_ALPHA_DOWN=0.05` (fast decay toward quieter
+  ambient), `_RMS_FLOOR_ALPHA_UP=0.02` (slow drift up), and frames louder than
+  `_RMS_FLOOR_LEARN_CAP=2.0×` the current floor are never learned (transients).
+- `_speech_run` decays by 2 on a failing frame instead of hard-resetting to 0, so a single
+  10 ms low-confidence frame (stop-consonant closure) doesn't erase a reopen run.
+
+**Verified:** repro scenario now opens the gate in 40 ms with the floor unpoisoned (0.001 vs
+0.028 before); quiet speech-like bleed (0.85 prob, 2× floor) still fully blocked in strict mode
+(echo protection intact); dipped-onset opens via grace at 70 ms; full 18-check smoke suite
+passes. User must restart VocalClear to pick up the fix (running instance predates it).
+
+---
+
+### Session 009 — 2026-07-04 (full audit → resource optimization → UI/UX pass)
+
+**Goal:** Three-phase pass requested by the user: audit for latent bugs and fix them,
+lower resource usage, then refine UI/UX and small features.
+
+**Done — audit fixes (correctness):**
+- **Cross-thread `QTimer.singleShot(0, fn)` without a context object** (5 sites): from a plain
+  Python thread the zero-timeout functor form does NOT queue onto the GUI thread — Qt creates a
+  temp receiver in the *calling* thread, so the callback runs on the worker thread (or never).
+  Fixed by passing a main-thread QObject context, matching the pattern already used in
+  `settings_window._restart`: tray watchdog success/failure (`self._tray`), settings calibrate
+  done + test-mic done (`self`), soundboard export/import status (`self`).
+  ⚠ The "Key facts" note from session 001 saying `QTimer.singleShot(0, fn)` is the correct
+  cross-thread pattern is WRONG — always pass a context QObject: `QTimer.singleShot(0, ctx, fn)`.
+- **RNNoise small-block audio corruption** (`noise_filter.py`): with `block_size < 480` the old
+  code (a) returned **raw unfiltered mic audio** whenever no full 480-frame was ready — bypassing
+  denoise AND the anti-echo VAD gate — and (b) emitted only `len(audio)` of each processed
+  480-chunk, silently discarding the rest (416 of every 480 samples at block 64). Replaced with a
+  processed-output FIFO (`_rn_out`): silence while priming, then gap-free streaming. At the
+  default 480 block the FIFO is exact pass-through (no behavior/latency change).
+- **PTT modifiers ignored at runtime**: capture dialog stored "CTRL+X" but `_ptt_loop` polled only
+  X, so the bare key opened the mic. New `ptt_mods` config key (list of modifier VKs) captured by
+  the dialog and enforced in `_ptt_loop`. Old configs (no mods) behave as before.
+- **Settings input-device persisted before Apply**: changing the combo wrote config.json
+  immediately, so closing without Apply still switched devices on next launch. Combo is now a
+  pending selection (`_pending_input_device()`); config is written only in `_apply_and_restart`.
+  TEST MIC now records from the *pending* selection (what Apply would activate).
+- **Always-on tanh distorted the mic**: `_mix_soundboard` soft-clipped mic+SFX even with zero
+  sounds playing (tanh(0.9)≈0.716 — real compression of speech peaks). Added
+  `SoundBoard.has_playing()` fast path: mic passes untouched when the board is idle; tanh only
+  guards actual mixes. Also removed the double-tanh (get_mix_frame no longer clips — the engine
+  clips the final sum once).
+- `config.py` docstring `\.` invalid-escape SyntaxWarning fixed (raw string).
+- Removed dead code: `NoiseFilter.feed_calibration` + `_calibration_frames` (no callers).
+
+**Done — resource usage:**
+- Audio callback hot path: `indata[:, 0]` view instead of `.flatten()` copy; `_write_out()`
+  writes into `outdata` in place (replaces per-callback `column_stack` alloc); dot-product RMS
+  (`_rms`) replaces `mean(x**2)` temps (also inside the VAD gate loop); `_apply_gain` clips
+  in place; RNNoise int16→float32 divide done in place. Idle-soundboard fast path skips a
+  480-sample zeros alloc + add + tanh per callback (100×/s).
+- `SnapManager._poll`: hidden windows (main window closed to tray — the dominant idle state) now
+  poll at 500 ms instead of 25 ms (40/s → 2/s wakeups + Win32 calls, per window).
+- Tray icons rendered once (both states cached) instead of PIL redraw + QIcon conversion per
+  toggle. Soundboard refresh timer unified to `TICK_MS` (was 50 ms on first open, 100 ms after).
+
+**Done — UI/UX (kept to existing palette tokens; FEATURE_IDEAS.md items untouched — still gated):**
+- All custom-painted buttons (`_IconButton`, `_GlowButton`, `_HeaderBtn`/`_SmallBtn`) now have a
+  pressed visual state and fire on **release-inside** (drag off to cancel — matters for QUIT).
+  Sound tiles intentionally still fire on press (soundboard latency). `_SmallBtn` deduplicated to
+  class attrs (`_FONT`/`_PAD_*`) instead of a copy-pasted paintEvent.
+- Mouse-wheel support on all bar sliders (strength, gain, SFX master, volume popup) — 5% per
+  notch, persists like a drag release.
+- Tooltips across all three windows (main buttons/chips, settings sliders + test mic + apply,
+  soundboard header/toggles/SFX bar/tiles); QToolTip QSS added to settings + soundboard windows.
+- Global mute hotkey discoverable: bottom hint bar now reads
+  "X closes to tray · R-CTRL+\\ toggles mute" (was near-invisible #1a3320; now #588a62).
+- Soundboard: new "⌂ FOLDER" header button opens the sounds folder in Explorer.
+- Volume popup: live preview — volume applies in-memory while dragging (audible if the sound is
+  playing), SAVE persists, Cancel/X rolls back to the original.
+
+**Verification:** all modules compile with `-W error::SyntaxWarning`; 18-check synthetic smoke
+test (RNNoise FIFO at 480 + 64 blocks: no raw leak, gap-free post-gate stream; engine helpers;
+gain clip; has_playing) passes; offscreen (`QT_QPA_PLATFORM=offscreen`) construction of all three
+windows + volume popup + wheel-event math passes with the real RNNoise backend active.
+
+**Problems:** none blocking. Note the audio-path changes (FIFO, idle fast path, in-place writes)
+are covered by synthetic tests but should get a real voice-call listen before being trusted.
+
+**Next session should do:** live listening test of the audio path; revisit FEATURE_IDEAS.md items
+if the user approves any (AGC is the researched first candidate).
+
+**Addendum (same session) — Windows identity + titlebar:**
+- **Task Manager "Python" name — attempted fix, STILL OPEN, not resolved.** Root cause
+  diagnosis: the Processes-tab name is the VERSIONINFO `FileDescription` of the exe file hosting
+  the process — for `pythonw.exe main.py` that is always "Python"; installs/shortcuts/AUMIDs
+  cannot change it. Built `windows_identity.py`: self-contained launcher at
+  `%USERPROFILE%\.vocalclear\bin\VocalClear.exe` (patched pythonw copy — version + icon
+  resources rewritten via `UpdateResource`; runtime DLLs copied beside it; `._pth` files pin the
+  real install's sys.path). Verified in isolation: the built exe's own FileDescription reads
+  "VocalClear" via both `version.dll` and PowerShell, and the launcher correctly imports the
+  full dependency stack and passes the offscreen GUI smoke test. Registry Run key + desktop
+  shortcut (OneDrive desktop) repointed; `config.set_startup` and `create_shortcut.py` prefer
+  the launcher; `main.py` refreshes it best-effort at startup.
+  **However: user reports Task Manager still shows "Python" after this.** None of the above
+  verification actually confirms Task Manager itself renders the fixed name — that step was
+  never directly checked. Leading suspects for next session (untested, do not assume): a stale
+  `pythonw.exe` process left over from before the fix (one was observed still running,
+  PID 6592, at end of the prior session), a launch path that bypasses the updated shortcut,
+  Windows Defender/SmartScreen silently interfering with the unsigned patched exe, or Task
+  Manager/shell caching. See the "Open Investigation" section in CLAUDE.md for the full
+  diagnostic breakdown — do not attempt further code changes here until that's narrowed down.
+  ctypes gotcha (still valid, keep): `BeginUpdateResourceW` MUST have `restype=HANDLE` or the
+  handle truncates on 64-bit (error 87).
+- **vocalclear.ico was broken** (196 bytes, single 16×16 image): `make_ico` saved the 16px image
+  first and Pillow silently drops requested sizes larger than the base image. Fixed
+  largest-first; regenerated (4.2 KB, 16–256px). This also sharpens taskbar/alt-tab icons.
+- **AppUserModelID unified** to "VocalClear.App" (main.py had "VocalClear.NoiseSuppress.1",
+  tray_app had "VocalClear.App" — split identity fragments taskbar grouping).
+- **Settings white titlebar**: dark-titlebar call centralized in `ui_utils.apply_dark_titlebar`
+  (proper HWND/DWORD ctypes types, attribute 20 with 19 fallback) and now RE-ASSERTED in every
+  window's `showEvent` — DWM can ignore the attribute when set before a window has ever been
+  composed, which is how a lazily-created window ends up white while its siblings are dark.
+
+---
+
 ### Session 008 — 2026-06-26 (mic-echo investigation + broad improvement pass)
 
 **Goal:** Root-cause a recurring "mic echoes friends' voices after silence" report, fix what's  
