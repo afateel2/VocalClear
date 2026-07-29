@@ -31,9 +31,20 @@ def create_desktop_shortcut() -> bool:
         return False
 
     main_script = project_dir / "main.py"
-    python_exe  = Path(sys.executable)
-    pythonw_exe = python_exe.parent / "pythonw.exe"
-    launcher    = str(pythonw_exe) if pythonw_exe.exists() else str(python_exe)
+
+    # Prefer the identity launcher: Task Manager then shows "VocalClear"
+    # (pythonw.exe would show as "Python" — the exe's version resource wins).
+    launcher = None
+    try:
+        from windows_identity import ensure_launcher
+        launcher = str(ensure_launcher(ico_path=ico_path))
+        print(f"[launcher] Identity launcher: {launcher}")
+    except Exception as exc:
+        print(f"[launcher] Warning — could not build VocalClear.exe: {exc}")
+    if launcher is None:
+        python_exe  = Path(sys.executable)
+        pythonw_exe = python_exe.parent / "pythonw.exe"
+        launcher    = str(pythonw_exe) if pythonw_exe.exists() else str(python_exe)
 
     shell          = win32com.client.Dispatch("WScript.Shell")
     desktop        = Path(shell.SpecialFolders("Desktop"))

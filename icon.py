@@ -106,9 +106,11 @@ def make_ico(dest: Path) -> Path:
     Generate a multi-resolution .ico file at *dest* and return the path.
     Sizes included: 16, 32, 48, 64, 128, 256
     """
-    sizes   = [16, 32, 48, 64, 128, 256]
+    # Largest FIRST: Pillow's ICO writer drops any requested size larger than
+    # the base image, so saving the 16px image first silently produced a
+    # single-size 196-byte icon (blurry taskbar/alt-tab rendering).
+    sizes   = [256, 128, 64, 48, 32, 16]
     images  = [draw_icon(s, active=True) for s in sizes]
-    # ico format: save largest first, list the rest as append_images
     images[0].save(
         dest,
         format   = "ICO",

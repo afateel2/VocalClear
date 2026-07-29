@@ -100,10 +100,11 @@ def _set_process_identity() -> None:
     """
     try:
         import ctypes
-        # Distinct App User Model ID — Task Manager uses this to group and
-        # label the process, and to resolve the icon from the window handle.
+        # App User Model ID — groups taskbar entries / notifications.
+        # MUST match the one set in tray_app.py (they were once different,
+        # which fragments taskbar identity — keep them identical).
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "VocalClear.NoiseSuppress.1"
+            "VocalClear.App"
         )
     except Exception:
         pass
@@ -114,12 +115,31 @@ def _set_process_identity() -> None:
         pass
 
 
+def _refresh_identity_launcher() -> None:
+    """Best-effort background refresh of ~/.vocalclear/bin/VocalClear.exe.
+
+    The launcher is what makes Task Manager show "VocalClear" instead of
+    "Python".  ensure_launcher() is a cheap stat-compare no-op unless the
+    source Python install was upgraded; failures are silently ignored
+    (e.g. exe locked because THIS process is running from it).
+    """
+    try:
+        from windows_identity import ensure_launcher
+        ensure_launcher()
+    except Exception:
+        pass
+
+
 def main() -> None:
     _set_process_identity()
     _rotate_log()
     prev_crashed = _check_previous_crash()
     _log("VocalClear starting")
     try:
+        import threading
+        threading.Thread(target=_refresh_identity_launcher, daemon=True,
+                         name="VocalClear-identity").start()
+
         if not _ensure_single_instance():
             # Another instance is already running; show a brief notice and exit.
             try:
