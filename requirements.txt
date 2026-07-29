@@ -2,8 +2,11 @@ sounddevice>=0.4.6
 numpy>=1.24.0
 scipy>=1.11.0
 soundfile>=0.12.0
-pystray>=0.19.4
+PySide6>=6.5.0
 Pillow>=10.0.0
 pywin32>=306
-deepfilternet>=0.5.6      # optional: needs Rust + MSVC to build
-pyrnnoise>=0.4.0          # AI noise suppression, no compilation needed
+pyrnnoise>=0.4.0          # AI noise suppression (Tier 2) — pre-built wheels, no compiler needed
+
+# Optional — Tier 1, best quality, needs Rust + MSVC Build Tools to install.
+# App auto-falls back to pyrnnoise above if this isn't installed.
+#   pip install deepfilternet>=0.5.6
