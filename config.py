@@ -1,4 +1,4 @@
-"""
+r"""
 Persistent JSON configuration stored at %USERPROFILE%\.vocalclear\config.json
 """
 
@@ -28,8 +28,9 @@ DEFAULTS = {
     "wasapi_exclusive": False,  # Exclusive WASAPI mode: ~3 ms vs ~20 ms shared
     "output_gain": 1.0,        # Output gain multiplier 0.5×–3.0× applied before VB-CABLE
     "ptt_enabled": False,      # Push-to-talk: mic only active while ptt_vk is held
-    "ptt_key": "",             # Human-readable PTT key label (e.g. "F4")
+    "ptt_key": "",             # Human-readable PTT key label (e.g. "CTRL+F4")
     "ptt_vk": 0,               # Win32 virtual-key code for PTT key
+    "ptt_mods": [],            # Required modifier VKs (0x11 CTRL, 0x12 ALT, 0x10 SHIFT)
     "window_x": None,          # Main window position (None = OS default)
     "window_y": None,
 }
@@ -129,7 +130,17 @@ class Config:
                     # PyInstaller exe: sys.executable IS the exe; no script arg needed
                     cmd = f'"{sys.executable}"'
                 else:
-                    cmd = f'"{sys.executable}" "{MAIN_SCRIPT}"'
+                    # Prefer the identity launcher (Task Manager shows
+                    # "VocalClear" instead of "Python") when it exists.
+                    host = sys.executable
+                    try:
+                        from windows_identity import launcher_path
+                        lp = launcher_path()
+                        if lp.exists():
+                            host = str(lp)
+                    except Exception:
+                        pass
+                    cmd = f'"{host}" "{MAIN_SCRIPT}"'
                 winreg.SetValueEx(key, self._REG_NAME, 0, winreg.REG_SZ, cmd)
             else:
                 try:

@@ -62,13 +62,7 @@ FONT_MONO_L = QFont("Consolas", 8)
 W, H = 540, 590
 
 
-def _apply_dark_titlebar(hwnd: int) -> None:
-    import ctypes
-    try:
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int))
-    except Exception:
-        pass
+from ui_utils import apply_dark_titlebar as _apply_dark
 
 
 def _hdivider(color: QColor = C_GREEN_LO, margin: int = 0) -> QFrame:
@@ -156,6 +150,18 @@ class _BarSlider(QWidget):
         if e.button() == Qt.MouseButton.LeftButton and self._on_release:
             self._on_release()
 
+    def wheelEvent(self, e):
+        steps = e.angleDelta().y() / 120.0
+        if not steps:
+            return
+        self._value = max(0.0, min(1.0, self._value + steps * 0.05))
+        self.update()
+        if self._on_change:
+            self._on_change(self._value)
+        if self._on_release:
+            self._on_release()   # persist — same as finishing a drag
+        e.accept()
+
 
 class _GainSlider(_BarSlider):
     """Bar slider that also draws a unity (1.0×) tick mark."""
@@ -237,6 +243,7 @@ class _GlowButton(QWidget):
         self._callback    = callback
         self._base_color  = color
         self._hovered     = False
+        self._pressed     = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
@@ -251,17 +258,36 @@ class _GlowButton(QWidget):
         return QSize(fm.horizontalAdvance(self._text) + 22, fm.height() + 12)
 
     def paintEvent(self, _):
-        p   = QPainter(self)
-        col = self._base_color.lighter(130) if self._hovered else self._base_color
+        p = QPainter(self)
+        if self._pressed:
+            col = self._base_color.darker(140)
+        elif self._hovered:
+            col = self._base_color.lighter(130)
+        else:
+            col = self._base_color
         p.fillRect(self.rect(), col)
         p.setFont(FONT_MONO)
         p.setPen(C_BG_ROOT)
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
 
     def enterEvent(self, _): self._hovered = True;  self.update()
-    def leaveEvent(self, _): self._hovered = False; self.update()
+
+    def leaveEvent(self, _):
+        self._hovered = False
+        self._pressed = False
+        self.update()
+
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton: self._callback()
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._pressed:
+            self._pressed = False
+            self.update()
+            if self.rect().contains(e.position().toPoint()):
+                self._callback()
 
 
 # ── Dropdown (QComboBox styled) ───────────────────────────────────────────────
@@ -322,14 +348,14 @@ class _PTTCaptureDialog(QMainWindow):
         self._on_captured = on_captured
         self._on_cancel   = on_cancel
         self._stop        = threading.Event()
-        self._captured: Optional[tuple[str, int]] = None
+        self._captured: Optional[tuple[str, int, list[int]]] = None
 
         self.setWindowTitle("PTT Key")
         self.setFixedSize(340, 160)
         self.setStyleSheet(
             "QMainWindow, QWidget { background: #030603; }"
         )
-        _apply_dark_titlebar(int(self.winId()))
+        _apply_dark(self)
 
         ico = Path(__file__).parent / "vocalclear.ico"
         if ico.exists():
@@ -407,11 +433,13 @@ class _PTTCaptureDialog(QMainWindow):
                         return
                     name  = self._VK_NAMES.get(vk, f"VK{vk:02X}")
                     parts = []
-                    if ctrl:  parts.append("CTRL")
-                    if alt:   parts.append("ALT")
-                    if shift: parts.append("SHIFT")
+                    mods: list[int] = []
+                    if ctrl:  parts.append("CTRL");  mods.append(0x11)
+                    if alt:   parts.append("ALT");   mods.append(0x12)
+                    if shift: parts.append("SHIFT"); mods.append(0x10)
                     parts.append(name)
-                    with self._lock: self._q.append(("key", "+".join(parts), vk))
+                    with self._lock:
+                        self._q.append(("key", "+".join(parts), vk, mods))
             _t.sleep(0.01)
 
     def _drain(self) -> None:
@@ -421,7 +449,7 @@ class _PTTCaptureDialog(QMainWindow):
             if msg[0] == "cancel":
                 self._do_cancel(); return
             elif msg[0] == "key":
-                self._captured = (msg[1], msg[2])
+                self._captured = (msg[1], msg[2], msg[3])
                 self._cap_lbl.setText(msg[1])
                 self._cap_lbl.setStyleSheet(
                     "color: #00e676; background: #0f1f0f; "
@@ -492,10 +520,12 @@ class SettingsWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(ico)))
 
         self.setStyleSheet(
-            "QMainWindow, QWidget { background: #030603; color: #c8ffd4; }")
+            "QMainWindow, QWidget { background: #030603; color: #c8ffd4; }"
+            "QToolTip { background-color: #0b160b; color: #00e676;"
+            "  border: 1px solid #007a40; font-family: Consolas; font-size: 8pt; }")
 
         self._build_ui()
-        _apply_dark_titlebar(int(self.winId()))
+        _apply_dark(self)
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
@@ -564,6 +594,8 @@ class SettingsWindow(QMainWindow):
         self._strength_bar = _BarSlider(value=self.config["strength"])
         self._strength_bar.set_on_change(self._on_strength)
         self._strength_bar.set_on_release(self.config.save)
+        self._strength_bar.setToolTip(
+            "Noise suppression strength — drag or scroll to adjust")
         eng.addWidget(self._strength_bar)
 
         if self.noise_filter.backend == "wiener":
@@ -618,6 +650,8 @@ class SettingsWindow(QMainWindow):
         # Test mic row
         test_row = QHBoxLayout(); test_row.setSpacing(8)
         self._test_mic_btn = _GlowButton("[ TEST MIC — 2 s ]", self._do_test_mic)
+        self._test_mic_btn.setToolTip(
+            "Record 2 s from the selected input device and play it back")
         test_row.addWidget(self._test_mic_btn)
         self._test_mic_status = QLabel("")
         self._test_mic_status.setFont(FONT_MONO_L)
@@ -659,6 +693,8 @@ class SettingsWindow(QMainWindow):
         self._gain_bar = _GainSlider(value=init_pct)
         self._gain_bar.set_on_change(self._on_gain)
         self._gain_bar.set_on_release(self.config.save)
+        self._gain_bar.setToolTip(
+            "Output gain (0.5×–3.0×) — amber dash marks unity 1.0×")
         gain_c.addWidget(self._gain_bar)
 
         # ── Push-to-talk ──────────────────────────────────────────────────────
@@ -696,6 +732,8 @@ class SettingsWindow(QMainWindow):
         bar_lo.addStretch()
         self._apply_btn = _GlowButton("[ APPLY & RESTART AUDIO ]",
                                       self._apply_and_restart, C_GREEN_DIM)
+        self._apply_btn.setToolTip(
+            "Apply device / exclusive-mode changes (restarts the audio stream)")
         bar_lo.addWidget(self._apply_btn)
         root.addWidget(bar)
 
@@ -736,7 +774,7 @@ class SettingsWindow(QMainWindow):
             self._status_lbl.setText("⏸ PAUSED"); self._status_lbl.setStyleSheet("color: #588a62;")
 
     def _check_dirty(self) -> None:
-        new_input    = self._input_map.get(self._input_combo.currentText() if self._input_combo else "System default", None)
+        new_input    = self._pending_input_device()
         new_excl     = self._excl_btn.state if self._excl_btn else False
         new_startup  = self._startup_btn.state if self._startup_btn else False
         new_strength = self._strength_bar.value if self._strength_bar else self._orig_strength
@@ -768,9 +806,14 @@ class SettingsWindow(QMainWindow):
         self._check_dirty()
 
     def _on_device_changed(self) -> None:
-        name = self._input_combo.currentText() if self._input_combo else "System default"
-        self.config["input_device"] = self._input_map.get(name, None)
+        # Pending selection only — config is written in _apply_and_restart.
+        # Persisting here would silently activate the new device on next
+        # launch even if the user never pressed Apply.
         self._check_dirty()
+
+    def _pending_input_device(self) -> Optional[int]:
+        name = self._input_combo.currentText() if self._input_combo else "System default"
+        return self._input_map.get(name, None)
 
     def _on_startup_toggle(self) -> None:
         if self._startup_btn:
@@ -793,10 +836,11 @@ class SettingsWindow(QMainWindow):
             self._ptt_btn.state = new_state
 
     def _on_ptt_set_key(self) -> None:
-        def _captured(label: str, vk: int) -> None:
+        def _captured(label: str, vk: int, mods: list[int]) -> None:
             self._ptt_key_str = label
-            self.config["ptt_key"] = label
-            self.config["ptt_vk"]  = vk
+            self.config["ptt_key"]  = label
+            self.config["ptt_vk"]   = vk
+            self.config["ptt_mods"] = mods
             if self._ptt_key_lbl:
                 self._ptt_key_lbl.setText(label)
 
@@ -810,11 +854,14 @@ class SettingsWindow(QMainWindow):
             self._calib_status.setText("CALIBRATING…")
 
         def _done():
+            # Called from a plain Python thread — `self` as context object
+            # guarantees the lambdas are queued onto the Qt main thread.
             if self._calib_btn:
-                QTimer.singleShot(0, lambda: self._calib_btn.set_text(
+                QTimer.singleShot(0, self, lambda: self._calib_btn.set_text(
                     "[ CALIBRATE — stay quiet 3 s ]"))
             if self._calib_status:
-                QTimer.singleShot(0, lambda: self._calib_status.setText("CALIBRATED"))
+                QTimer.singleShot(0, self,
+                                  lambda: self._calib_status.setText("CALIBRATED"))
 
         self.engine.start_calibration(duration_s=3.0, done_cb=_done)
 
@@ -826,7 +873,7 @@ class SettingsWindow(QMainWindow):
                 self._test_mic_status.setStyleSheet("color: #ffb300;")
             return
 
-        input_dev = self.config["input_device"]
+        input_dev = self._pending_input_device()   # test what Apply would use
         if self._test_mic_btn:
             self._test_mic_btn.set_text("[ RECORDING 2 s… ]")
         if self._test_mic_status:
@@ -845,7 +892,9 @@ class SettingsWindow(QMainWindow):
                 status, color = "PLAYED BACK", "#6aaa7a"
             except Exception as exc:
                 status, color = f"ERROR: {exc}", "#ff1744"
-            QTimer.singleShot(0, lambda s=status, c=color: self._on_test_done(s, c))
+            # `self` as context → delivered on the Qt main thread
+            QTimer.singleShot(0, self,
+                              lambda s=status, c=color: self._on_test_done(s, c))
 
         threading.Thread(target=_run, daemon=True, name="VocalClear-testmic").start()
 
@@ -857,8 +906,7 @@ class SettingsWindow(QMainWindow):
             self._test_mic_status.setStyleSheet(f"color: {color};")
 
     def _apply_and_restart(self) -> None:
-        new_input = self._input_map.get(
-            self._input_combo.currentText() if self._input_combo else "System default", None)
+        new_input = self._pending_input_device()
         new_excl  = self._excl_btn.state if self._excl_btn else False
 
         self.config["input_device"]     = new_input
@@ -930,6 +978,7 @@ class SettingsWindow(QMainWindow):
         event.accept()
 
     def showEvent(self, event) -> None:
+        _apply_dark(self)   # re-assert — DWM can drop it pre-first-show
         self._refresh_status()
         self._check_dirty()
         if self._snapper:

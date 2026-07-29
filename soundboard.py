@@ -401,6 +401,12 @@ class SoundBoard:
         with self._sounds_lock:
             return dict(self._sounds)
 
+    def has_playing(self) -> bool:
+        """Lock-free emptiness peek for the audio callback's fast path.
+        The list reference is swapped atomically; a one-frame-stale answer
+        is harmless (finished instances are removed inside get_mix_frame)."""
+        return bool(self._playing)
+
     @property
     def playing_names(self) -> set[str]:
         with self._play_lock:
@@ -458,7 +464,8 @@ class SoundBoard:
         if done:
             self._fire_play_changed()
 
-        np.tanh(out, out=out)
+        # No tanh here — AudioEngine soft-clips the final mic+SFX sum once;
+        # compressing twice only dulled loud sounds.
         return out
 
     # ──────────────────────────────────────────────────────────────────────────

@@ -79,12 +79,7 @@ QToolTip {
 
 # ── Win32 helpers ─────────────────────────────────────────────────────────────
 
-def _apply_dark_titlebar(hwnd: int) -> None:
-    try:
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int))
-    except Exception:
-        pass
+from ui_utils import apply_dark_titlebar as _apply_dark
 
 
 def _rms_to_db(rms: float) -> float:
@@ -185,7 +180,13 @@ class _IconButton(QWidget):
         r   = self.rect()
         col = self._hot if self._hovered else self._base
 
-        if self._hovered:
+        if self._pressed:
+            p.fillRect(r, self._hot.darker(150))
+            p.setPen(QPen(self._hot, 1))
+            p.drawRect(r.adjusted(0, 0, -1, -1))
+            icon_col = C_BG_ROOT
+            text_col = C_BG_ROOT
+        elif self._hovered:
             p.fillRect(r, col)
             p.setPen(QPen(col.lighter(160), 1))
             p.drawRect(r.adjusted(0, 0, -1, -1))
@@ -208,11 +209,25 @@ class _IconButton(QWidget):
                    self._text)
 
     def enterEvent(self, _):  self._hovered = True;  self.update()
-    def leaveEvent(self, _):  self._hovered = False; self.update()
 
+    def leaveEvent(self, _):
+        self._hovered = False
+        self._pressed = False
+        self.update()
+
+    # Fire on release-inside (standard button behavior): shows a pressed
+    # state and lets the user bail out by dragging off before releasing.
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            self._callback()
+            self._pressed = True
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._pressed:
+            self._pressed = False
+            self.update()
+            if self.rect().contains(e.position().toPoint()):
+                self._callback()
 
 
 # ── VU meter ──────────────────────────────────────────────────────────────────
@@ -647,7 +662,7 @@ class MainWindow(QMainWindow):
         self._tick_count: int                      = 0
 
         self._build_ui()
-        _apply_dark_titlebar(int(self.winId()))
+        _apply_dark(self)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -727,6 +742,8 @@ class MainWindow(QMainWindow):
 
         self._ptt_chip = QLabel("PTT")
         self._ptt_chip.setFont(FONT_MONO_S)
+        self._ptt_chip.setToolTip(
+            "Push-to-talk armed — mic opens while the PTT key is held")
         self._ptt_chip.setContentsMargins(6, 2, 6, 2)
         self._ptt_chip.setStyleSheet(
             "color: #588a62; background: #0b160b; border: 1px solid #004d28; padding: 2px 6px;")
@@ -734,6 +751,7 @@ class MainWindow(QMainWindow):
 
         self._mute_chip = QLabel("⊘ MUTED")
         self._mute_chip.setFont(FONT_MONO_S)
+        self._mute_chip.setToolTip("Mic is muted — click to unmute")
         self._mute_chip.setContentsMargins(6, 2, 6, 2)
         self._mute_chip.setStyleSheet(
             "color: #ff1744; background: #160505; border: 1px solid #7a0010; padding: 2px 6px;")
@@ -828,6 +846,8 @@ class MainWindow(QMainWindow):
         icon   = "pause" if active else "play"
         text   = "PAUSE" if active else "RESUME"
         self._toggle_btn = _IconButton(icon, text, self._on_toggle)
+        self._toggle_btn.setToolTip(
+            "Pause / resume noise filtering (paused = raw mic passthrough)")
         btn_lo.addWidget(self._toggle_btn)
 
         self._mute_btn = _IconButton(
@@ -836,12 +856,15 @@ class MainWindow(QMainWindow):
             hot_color =QColor("#cc0030"),
             text_idle =QColor("#cc5d6a"),
         )
+        self._mute_btn.setToolTip("Mute microphone  ·  hotkey: R-Ctrl+\\")
         btn_lo.addWidget(self._mute_btn)
 
         settings_btn = _IconButton("gear", "SETTINGS", self._on_settings)
+        settings_btn.setToolTip("Devices, strength, gain, push-to-talk")
         btn_lo.addWidget(settings_btn)
 
         sb_btn = _IconButton("grid", "SOUNDBOARD", self._on_soundboard)
+        sb_btn.setToolTip("Open the soundboard")
         btn_lo.addWidget(sb_btn)
         btn_lo.addStretch()
         root.addWidget(btn_bar)
@@ -856,9 +879,9 @@ class MainWindow(QMainWindow):
         bot_lo = QHBoxLayout(bot)
         bot_lo.setContentsMargins(14, 6, 14, 8)
 
-        hint = QLabel("X  closes to tray")
+        hint = QLabel("X closes to tray   ·   R-CTRL+\\ toggles mute")
         hint.setFont(FONT_MONO_S)
-        hint.setStyleSheet("color: #1a3320;")
+        hint.setStyleSheet("color: #588a62;")
         bot_lo.addWidget(hint)
         bot_lo.addStretch()
 
@@ -868,6 +891,7 @@ class MainWindow(QMainWindow):
             hot_color =QColor("#cc0030"),
             text_idle =QColor("#cc5d6a"),
         )
+        quit_btn.setToolTip("Quit VocalClear — audio routing stops")
         bot_lo.addWidget(quit_btn)
         root.addWidget(bot)
 
@@ -950,6 +974,7 @@ class MainWindow(QMainWindow):
             app.quit()
 
     def showEvent(self, event) -> None:
+        _apply_dark(self)   # re-assert — DWM can drop it pre-first-show
         if not self._timer.isActive():
             self._timer.start(VU_TICK_MS)
         event.accept()

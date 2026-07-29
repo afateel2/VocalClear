@@ -268,8 +268,13 @@ class TrayApp:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _build_tray(self, app: QApplication) -> None:
+        # Render both icon states once — no PIL redraw on every toggle
+        self._tray_icons = {
+            True:  _pil_to_qicon(draw_icon(64, active=True)),
+            False: _pil_to_qicon(draw_icon(64, active=False)),
+        }
         self._tray = QSystemTrayIcon(app)
-        self._tray.setIcon(_pil_to_qicon(draw_icon(64, active=self._active)))
+        self._tray.setIcon(self._tray_icons[self._active])
         self._tray.setToolTip(self._tooltip())
 
         # Build the context menu once; only the two dynamic actions need text updates.
@@ -325,7 +330,7 @@ class TrayApp:
         """Update icon + tooltip + dynamic menu labels after a state change."""
         if not self._tray:
             return
-        self._tray.setIcon(_pil_to_qicon(draw_icon(64, active=self._active)))
+        self._tray.setIcon(self._tray_icons[self._active])
         self._tray.setToolTip(self._tooltip())
         self._update_menu_labels()
 
@@ -483,14 +488,18 @@ class TrayApp:
             ).start()
 
     def _watchdog_restart(self) -> None:
+        # Runs on a plain Python thread — QTimer.singleShot needs a QObject
+        # context living on the main thread (self._tray) or the callback is
+        # NOT queued to the GUI thread (it runs on this thread, or never).
         try:
             self.engine.restart()
             _log(f"Watchdog restart succeeded → {self.engine.output_device_name}")
-            QTimer.singleShot(0, self._on_watchdog_success)
+            QTimer.singleShot(0, self._tray, self._on_watchdog_success)
         except Exception as exc:
             _log(f"Watchdog restart failed: {exc}")
             self._watched_error = str(exc)   # prevent immediate re-trigger
-            QTimer.singleShot(0, lambda e=str(exc): self._on_watchdog_failure(e))
+            QTimer.singleShot(0, self._tray,
+                              lambda e=str(exc): self._on_watchdog_failure(e))
         finally:
             self._watchdog_restart_active = False
 

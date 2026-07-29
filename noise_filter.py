@@ -48,8 +48,18 @@ _THRESH_BUMP_STRICT  = 0.20 # additional speech-prob margin in strict mode
 # and in strict mode also require the candidate frame to be louder than that
 # floor by _RMS_MARGIN.  Direct mic speech is normally tens of dB above the
 # room/bleed floor, so this rejects bleed even when RNNoise is fooled.
-_RMS_FLOOR_ALPHA = 0.02   # EMA smoothing for the learned noise floor
-_RMS_MARGIN      = 3.0    # candidate must exceed floor by this multiple (~+9.5 dB)
+#
+# The floor is a MINIMUM statistic, not an average.  Breaths and unvoiced
+# fricatives (s/f/sh) are loud but score low speech_prob — averaging them in
+# inflated the floor toward speech level exactly while the user was talking
+# into a closed gate, locking their own voice out until a few seconds of
+# silence decayed the floor again ("mic dead until I wait and retry" bug,
+# fixed 2026-07-11).  Rules: adapt down fast, drift up slowly, and NEVER
+# learn from a frame louder than _RMS_FLOOR_LEARN_CAP × the current floor.
+_RMS_FLOOR_ALPHA_DOWN = 0.05  # fast decay toward quieter ambient
+_RMS_FLOOR_ALPHA_UP   = 0.02  # slow rise for genuine ambient drift
+_RMS_FLOOR_LEARN_CAP  = 2.0   # louder-than-2×floor frames are transients — skip
+_RMS_MARGIN           = 3.0   # candidate must exceed floor by this (~+9.5 dB)
 
 
 class NoiseFilter:
@@ -71,6 +81,7 @@ class NoiseFilter:
         self._rn_state  = None    # RNNoise ctypes state pointer
         self._rn_proc   = None    # process_mono_frame callable
         self._rn_carry: np.ndarray = np.array([], dtype=np.float32)
+        self._rn_out:   np.ndarray = np.array([], dtype=np.float32)
         self._hold_ctr:    int   = 0
         self._speech_run:  int   = 0   # consecutive frames above threshold (gate closed)
         self._silence_run: int   = 0   # consecutive frames of gate-fully-closed silence
@@ -120,6 +131,7 @@ class NoiseFilter:
             self._rn_state     = _rn_create()
             self._rn_proc      = process_mono_frame
             self._rn_carry     = np.array([], dtype=np.float32)
+            self._rn_out       = np.array([], dtype=np.float32)
             self._hold_ctr     = 0
             self._speech_run   = 0
             self._silence_run  = 0
@@ -156,7 +168,6 @@ class NoiseFilter:
         self._sosfilt   = scipy_signal.sosfilt  # store to avoid per-call module lookup
 
         self.noise_psd: Optional[np.ndarray] = None
-        self._calibration_frames: list       = []
         self._prev_input = np.zeros(self.hop, dtype=np.float32)
         self._alpha_noise = 0.05
         self.is_calibrated = False
@@ -199,22 +210,6 @@ class NoiseFilter:
         if self.backend == "wiener":
             self._wiener_update_noise(audio)
 
-    def feed_calibration(self, audio: np.ndarray) -> bool:
-        if self.backend != "wiener":
-            return True
-        for i in range(0, len(audio) - self.n_fft + 1, self.hop):
-            frame = audio[i: i + self.n_fft].astype(np.float32) * self.window
-            mag   = np.abs(np.fft.rfft(frame)).astype(np.float32)
-            self._calibration_frames.append(mag ** 2)
-        target = int(2.0 * self.sample_rate / self.hop)
-        if len(self._calibration_frames) >= target:
-            self.noise_psd = np.median(
-                self._calibration_frames, axis=0).astype(np.float32)
-            self._calibration_frames.clear()
-            self.is_calibrated = True
-            return True
-        return False
-
     # ------------------------------------------------------------------ #
     # Tier 1 — DeepFilterNet                                              #
     # ------------------------------------------------------------------ #
@@ -245,25 +240,30 @@ class NoiseFilter:
     def _process_rnnoise(self, audio: np.ndarray) -> np.ndarray:
         # Carry is float32 in [-1, 1]; process_mono_frame handles int16 scaling.
         # audio is already float32 here — process() casts it before dispatch.
+        # Input carry accumulates until a full 480-sample RNNoise frame exists;
+        # processed audio is queued in an output FIFO (_rn_out) and emitted in
+        # exactly len(audio)-sized blocks.  Never emit raw input — with
+        # block_size < 480 that would leak unfiltered mic audio past the VAD
+        # gate — and never drop processed samples.  At the default block size
+        # of 480 the FIFO is pass-through (in 480 → out 480 every call).
         combined  = np.concatenate([self._rn_carry, audio])
         n_full    = (len(combined) // _RNNOISE_FRAME) * _RNNOISE_FRAME
         self._rn_carry = combined[n_full:].copy()
-
-        if n_full == 0:
-            return audio.copy()
-
-        frames = combined[:n_full].reshape(-1, _RNNOISE_FRAME)
-        chunks: list[np.ndarray] = []
 
         # VAD gate threshold: strength 0 → 0.20, strength 1 → 0.70
         # Higher base prevents speaker bleed (friends' voices picked up by mic)
         # from opening the gate when the user is silent.
         vad_thresh = 0.20 + 0.50 * self.strength
 
+        chunks: list[np.ndarray] = []
+        frames = (combined[:n_full].reshape(-1, _RNNOISE_FRAME)
+                  if n_full else ())
+
         for frame in frames:
             # process_mono_frame: float32 [-1,1] in → (int16 denoised, speech_prob)
             denoised_i16, speech_prob = self._rn_proc(self._rn_state, frame)
-            denoised_f = denoised_i16.astype(np.float32) / 32767.0
+            denoised_f = denoised_i16.astype(np.float32)
+            denoised_f /= 32767.0
 
             # ── VAD gate with hold time and re-open debounce ──────
             if self._hold_ctr > 0:
@@ -277,8 +277,8 @@ class NoiseFilter:
                     self._hold_ctr  -= 1
                     self._speech_run = 0
                     # Smooth fade-out so the gate close is click-free.
-                    fade = self._hold_ctr / _HOLD_FRAMES
-                    chunks.append(denoised_f * fade)
+                    denoised_f *= self._hold_ctr / _HOLD_FRAMES
+                    chunks.append(denoised_f)
             else:
                 # Gate is fully closed.  After prolonged silence, raise the
                 # threshold and require several consecutive speech frames
@@ -300,7 +300,8 @@ class NoiseFilter:
                 # bleed can still score high confidence.  In strict mode also
                 # require the raw frame to be louder than the learned ambient
                 # floor — direct mic speech is normally far above bleed level.
-                frame_rms = float(np.sqrt(np.mean(frame ** 2)))  # frame is already float32
+                # dot-product RMS avoids the frame**2 temp array (hot path)
+                frame_rms = float(np.sqrt(np.dot(frame, frame) / frame.size))
                 if strict and self._noise_floor_rms > 1e-6:
                     passes_rms = frame_rms >= self._noise_floor_rms * _RMS_MARGIN
                 else:
@@ -318,29 +319,44 @@ class NoiseFilter:
                         # Still accumulating — remain silent.
                         chunks.append(np.zeros_like(denoised_f))
                 else:
-                    self._speech_run = 0
+                    # Decay instead of hard reset: real speech onsets contain
+                    # single 10 ms low-confidence frames (stop closures), and
+                    # one dip must not erase the whole accumulated run.
+                    # Sustained non-speech still drains the run to zero.
+                    self._speech_run = max(0, self._speech_run - 2)
                     # Learn the ambient/bleed floor from confirmed non-speech
-                    # frames only, so the estimate stays clean.
+                    # frames — as a minimum statistic (see constants above):
+                    # loud transients (breaths, fricatives, keyboard) must not
+                    # inflate it, or the user's own speech gets locked out.
                     if speech_prob < vad_thresh:
-                        if self._noise_floor_rms <= 1e-6:
+                        floor = self._noise_floor_rms
+                        if floor <= 1e-6:
                             self._noise_floor_rms = frame_rms
-                        else:
-                            self._noise_floor_rms = (
-                                _RMS_FLOOR_ALPHA * frame_rms
-                                + (1 - _RMS_FLOOR_ALPHA) * self._noise_floor_rms
-                            )
+                        elif frame_rms < floor:
+                            self._noise_floor_rms = floor + \
+                                _RMS_FLOOR_ALPHA_DOWN * (frame_rms - floor)
+                        elif frame_rms < floor * _RMS_FLOOR_LEARN_CAP:
+                            self._noise_floor_rms = floor + \
+                                _RMS_FLOOR_ALPHA_UP * (frame_rms - floor)
                     # Non-speech: hard zero prevents all speaker bleed-through.
                     chunks.append(np.zeros_like(denoised_f))
 
-        if not chunks:
-            return audio.copy()
+        if chunks:
+            if self._rn_out.size:
+                self._rn_out = np.concatenate([self._rn_out] + chunks)
+            elif len(chunks) == 1:
+                self._rn_out = chunks[0]
+            else:
+                self._rn_out = np.concatenate(chunks)
 
-        output = np.concatenate(chunks).astype(np.float32)
-
-        # Trim or pad to match the original block length
-        if len(output) >= len(audio):
-            return output[:len(audio)]
-        return np.pad(output, (0, len(audio) - len(output)))
+        n = len(audio)
+        if self._rn_out.size >= n:
+            out = self._rn_out[:n]
+            self._rn_out = self._rn_out[n:]
+            return out
+        # FIFO still priming (only possible while block_size < 480):
+        # emit silence and keep queued samples so ordering is preserved.
+        return np.zeros(n, dtype=np.float32)
 
     # ------------------------------------------------------------------ #
     # Tier 3 — Wiener spectral subtraction                               #

@@ -6,6 +6,7 @@ Fixed 480×590 px to match main/settings for horizontal snapping.
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -55,13 +56,7 @@ BTN_H    = 90
 TICK_MS  = 100
 
 
-def _apply_dark_titlebar(hwnd: int) -> None:
-    import ctypes
-    try:
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int))
-    except Exception:
-        pass
+from ui_utils import apply_dark_titlebar as _apply_dark
 
 
 def _hdivider(color: QColor = C_GREEN_LO) -> QFrame:
@@ -115,6 +110,10 @@ class _ToggleBtn(QLabel):
 class _HeaderBtn(QWidget):
     """Bordered action button for the soundboard header."""
 
+    _FONT    = FONT_MONO_L
+    _PAD_W   = 18
+    _PAD_H   = 10
+
     def __init__(self, text: str, callback,
                  color: QColor = C_GREEN_DIM,
                  hot: QColor = C_GREEN,
@@ -127,20 +126,27 @@ class _HeaderBtn(QWidget):
         self._hot       = hot
         self._idle_text = text_idle or color
         self._hovered   = False
+        self._pressed   = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def set_text(self, t: str) -> None: self._text = t; self.update()
 
     def sizeHint(self) -> QSize:
-        fm = QFontMetrics(FONT_MONO_L)
-        return QSize(fm.horizontalAdvance(self._text) + 18, fm.height() + 10)
+        fm = QFontMetrics(self._FONT)
+        return QSize(fm.horizontalAdvance(self._text) + self._PAD_W,
+                     fm.height() + self._PAD_H)
 
     def paintEvent(self, _):
         p   = QPainter(self)
         r   = self.rect()
         col = self._hot if self._hovered else self._base
-        if self._hovered:
+        if self._pressed:
+            p.fillRect(r, self._hot.darker(150))
+            p.setPen(QPen(self._hot, 1))
+            p.drawRect(r.adjusted(0, 0, -1, -1))
+            tc = C_BG_ROOT
+        elif self._hovered:
             p.fillRect(r, col)
             p.setPen(QPen(col.lighter(160), 1))
             p.drawRect(r.adjusted(0, 0, -1, -1))
@@ -150,39 +156,36 @@ class _HeaderBtn(QWidget):
             p.setPen(QPen(col, 1))
             p.drawRect(r.adjusted(0, 0, -1, -1))
             tc = self._idle_text
-        p.setFont(FONT_MONO_L)
+        p.setFont(self._FONT)
         p.setPen(tc)
         p.drawText(r, Qt.AlignmentFlag.AlignCenter, self._text)
 
     def enterEvent(self, _): self._hovered = True;  self.update()
-    def leaveEvent(self, _): self._hovered = False; self.update()
+
+    def leaveEvent(self, _):
+        self._hovered = False
+        self._pressed = False
+        self.update()
+
+    # Fire on release-inside: pressed-state feedback + drag-off to cancel
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton: self._callback()
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._pressed:
+            self._pressed = False
+            self.update()
+            if self.rect().contains(e.position().toPoint()):
+                self._callback()
 
 
-# Alias for the volume popup (same widget, slightly larger text)
+# Same widget with slightly larger text (used by the volume popup)
 class _SmallBtn(_HeaderBtn):
-    def sizeHint(self) -> QSize:
-        fm = QFontMetrics(FONT_MONO)
-        return QSize(fm.horizontalAdvance(self._text) + 22, fm.height() + 12)
-
-    def paintEvent(self, _):
-        p   = QPainter(self)
-        r   = self.rect()
-        col = self._hot if self._hovered else self._base
-        if self._hovered:
-            p.fillRect(r, col)
-            p.setPen(QPen(col.lighter(160), 1))
-            p.drawRect(r.adjusted(0, 0, -1, -1))
-            tc = C_BG_ROOT
-        else:
-            p.fillRect(r, QColor(8, 18, 8))
-            p.setPen(QPen(col, 1))
-            p.drawRect(r.adjusted(0, 0, -1, -1))
-            tc = self._idle_text
-        p.setFont(FONT_MONO)
-        p.setPen(tc)
-        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self._text)
+    _FONT  = FONT_MONO
+    _PAD_W = 22
+    _PAD_H = 12
 
 
 # ── SFX level slider ──────────────────────────────────────────────────────────
@@ -256,6 +259,18 @@ class _SFXBar(QWidget):
         if e.button() == Qt.MouseButton.LeftButton and self._on_release:
             self._on_release()
 
+    def wheelEvent(self, e):
+        steps = e.angleDelta().y() / 120.0
+        if not steps:
+            return
+        self._value = max(0.0, min(1.0, self._value + steps * 0.05))
+        self.update()
+        if self._on_change:
+            self._on_change(self._value)
+        if self._on_release:
+            self._on_release()   # persist — same as finishing a drag
+        e.accept()
+
 
 # ── Sound button ──────────────────────────────────────────────────────────────
 
@@ -280,6 +295,7 @@ class _SoundButton(QWidget):
         self._hovered    = False
         self.setFixedSize(BTN_W, BTN_H)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Left-click: play   ·   Right-click: options")
 
     def set_playing(self, v: bool) -> None:
         if v != self._playing:
@@ -388,15 +404,19 @@ class _SoundButton(QWidget):
 # ── Volume popup ──────────────────────────────────────────────────────────────
 
 class _VolumePopup(QMainWindow):
-    def __init__(self, name: str, init_vol: float, on_save, parent=None):
+    def __init__(self, name: str, init_vol: float, on_save,
+                 on_live=None, parent=None):
         super().__init__(parent)
         self._on_save = on_save
+        self._on_live = on_live   # applies immediately (audible while playing)
+        self._init    = init_vol
+        self._saved   = False
         self._vol     = [init_vol]
 
         self.setWindowTitle("Volume")
         self.setFixedSize(300, 160)
         self.setStyleSheet("QMainWindow, QWidget { background: #030603; }")
-        _apply_dark_titlebar(int(self.winId()))
+        _apply_dark(self)
 
         ico = Path(__file__).parent / "vocalclear.ico"
         if ico.exists(): self.setWindowIcon(QIcon(str(ico)))
@@ -431,8 +451,11 @@ class _VolumePopup(QMainWindow):
         def _changed(v):
             self._vol[0] = v
             self._pct.setText(f"{int(v * 100):3d}%")
+            if self._on_live:
+                self._on_live(v)   # live preview — hear it while adjusting
 
         self._bar.set_on_change(_changed)
+        self._bar.setToolTip("Drag or scroll — applies live; SAVE to keep")
         bl.addWidget(self._bar)
         lo.addWidget(body)
 
@@ -447,7 +470,14 @@ class _VolumePopup(QMainWindow):
         lo.addWidget(bbar)
 
     def _save(self) -> None:
+        self._saved = True
         self._on_save(self._vol[0]); self.close()
+
+    def closeEvent(self, e) -> None:
+        # Cancel / X: roll the live preview back to the original volume
+        if not self._saved and self._on_live:
+            self._on_live(self._init)
+        e.accept()
 
 
 # ── Soundboard window ─────────────────────────────────────────────────────────
@@ -466,20 +496,23 @@ class SoundBoardWindow(QMainWindow):
 
         self.setWindowTitle("SoundBoard  —  VocalClear")
         self.setFixedSize(W, H)
-        self.setStyleSheet("QMainWindow, QWidget { background: #030603; color: #c8ffd4; }")
+        self.setStyleSheet(
+            "QMainWindow, QWidget { background: #030603; color: #c8ffd4; }"
+            "QToolTip { background-color: #0b160b; color: #00e676;"
+            "  border: 1px solid #007a40; font-family: Consolas; font-size: 8pt; }")
 
         ico = Path(__file__).parent / "vocalclear.ico"
         if ico.exists(): self.setWindowIcon(QIcon(str(ico)))
 
         self._build_ui()
-        _apply_dark_titlebar(int(self.winId()))
+        _apply_dark(self)
 
         self.sb._on_sounds_changed = self._schedule_refresh
         self.sb._on_play_changed   = self._schedule_refresh
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._poll_refresh)
-        self._refresh_timer.start(50)
+        self._refresh_timer.start(TICK_MS)
 
     # ── Build UI ──────────────────────────────────────────────────────────────
 
@@ -516,17 +549,31 @@ class SoundBoardWindow(QMainWindow):
 
         # Action buttons row
         btn_row = QHBoxLayout(); btn_row.setContentsMargins(16, 0, 16, 10); btn_row.setSpacing(6)
-        btn_row.addWidget(_HeaderBtn("▼ IMPORT",   self._do_import))
-        btn_row.addWidget(_HeaderBtn("▲ EXPORT",   self._do_export))
-        btn_row.addWidget(_HeaderBtn("+ ADD",      self._add_sound))
-        btn_row.addWidget(_HeaderBtn("≈ NORMALIZE", self._do_normalize,
-                                     color=C_GREEN_LO, hot=C_GREEN_DIM,
-                                     text_idle=C_FG_DIM))
+        imp_btn = _HeaderBtn("▼ IMPORT", self._do_import)
+        imp_btn.setToolTip("Import a soundboard profile (.zip)")
+        btn_row.addWidget(imp_btn)
+        exp_btn = _HeaderBtn("▲ EXPORT", self._do_export)
+        exp_btn.setToolTip("Export all sounds + settings to a .zip profile")
+        btn_row.addWidget(exp_btn)
+        add_btn = _HeaderBtn("+ ADD", self._add_sound)
+        add_btn.setToolTip("Add audio files (copied into the sounds folder)")
+        btn_row.addWidget(add_btn)
+        norm_btn = _HeaderBtn("≈ NORMALIZE", self._do_normalize,
+                              color=C_GREEN_LO, hot=C_GREEN_DIM,
+                              text_idle=C_FG_DIM)
+        norm_btn.setToolTip("Auto-level per-sound volumes to equal loudness")
+        btn_row.addWidget(norm_btn)
+        fold_btn = _HeaderBtn("⌂ FOLDER", self._open_folder,
+                              color=C_GREEN_LO, hot=C_GREEN_DIM,
+                              text_idle=C_FG_DIM)
+        fold_btn.setToolTip("Open the sounds folder in Explorer")
+        btn_row.addWidget(fold_btn)
         btn_row.addStretch()
         self._stop_btn = _HeaderBtn(
             "▪ STOP ALL", self._stop_all,
             color=QColor("#5a0010"), hot=QColor("#cc0030"),
             text_idle=QColor("#cc5d6a"))
+        self._stop_btn.setToolTip("Stop every playing sound")
         btn_row.addWidget(self._stop_btn)
         hdr_lo.addLayout(btn_row)
         root.addWidget(hdr)
@@ -542,10 +589,14 @@ class SoundBoardWindow(QMainWindow):
 
         self._overlap_btn = _ToggleBtn("OVERLAP", self.sb.overlap)
         self._overlap_btn.set_callback(self._on_overlap_toggle)
+        self._overlap_btn.setToolTip(
+            "Allow several sounds to play at once (off = new sound cuts old)")
         ctrl_lo.addWidget(self._overlap_btn)
 
         self._monitor_btn = _ToggleBtn("MONITOR", self.sb.monitor_enabled)
         self._monitor_btn.set_callback(self._on_monitor_toggle)
+        self._monitor_btn.setToolTip(
+            "Also play sounds through your own speakers")
         ctrl_lo.addWidget(self._monitor_btn)
 
         # SFX bar + label grouped together
@@ -553,6 +604,8 @@ class SoundBoardWindow(QMainWindow):
         self._sfx_bar = _SFXBar(self.sb.master_volume)
         self._sfx_bar.set_on_change(self._on_sfx)
         self._sfx_bar.set_on_release(self.sb._save_sounds_config)
+        self._sfx_bar.setToolTip(
+            "Master soundboard volume — drag or scroll to adjust")
         self._sfx_pct = QLabel(f"{int(self.sb.master_volume * 100)}%")
         self._sfx_pct.setFont(FONT_MONO_L)
         self._sfx_pct.setStyleSheet("color: #00e676; min-width: 32px;")
@@ -752,6 +805,13 @@ class SoundBoardWindow(QMainWindow):
             threading.Thread(
                 target=lambda f=Path(p): self.sb.load_file(f), daemon=True).start()
 
+    def _open_folder(self) -> None:
+        if self.sb.sounds_dir:
+            try:
+                os.startfile(str(self.sb.sounds_dir))
+            except OSError:
+                pass
+
     def _do_normalize(self) -> None:
         if not self.sb.sounds:
             return
@@ -767,12 +827,14 @@ class SoundBoardWindow(QMainWindow):
         if not path:
             return
         def _run():
+            # Worker thread — `self` as context queues onto the Qt main thread
             try:
                 self.sb.export_profile(Path(path))
-                QTimer.singleShot(0, lambda: self._set_header_status("EXPORTED"))
+                QTimer.singleShot(0, self,
+                                  lambda: self._set_header_status("EXPORTED"))
             except Exception as e:
-                QTimer.singleShot(0, lambda: QMessageBox.critical(
-                    self, "Export Failed", str(e)))
+                QTimer.singleShot(0, self, lambda m=str(e): QMessageBox.critical(
+                    self, "Export Failed", m))
         threading.Thread(target=_run, daemon=True).start()
 
     def _do_import(self) -> None:
@@ -796,23 +858,36 @@ class SoundBoardWindow(QMainWindow):
             return
         merge = (result == QMessageBox.StandardButton.Yes)
         def _run():
+            # Worker thread — `self` as context queues onto the Qt main thread
             try:
                 self.sb.import_profile(Path(path), merge=merge)
-                QTimer.singleShot(0, lambda: self._set_header_status("IMPORTED"))
+                QTimer.singleShot(0, self,
+                                  lambda: self._set_header_status("IMPORTED"))
             except Exception as e:
-                QTimer.singleShot(0, lambda: QMessageBox.critical(
-                    self, "Import Failed", str(e)))
+                QTimer.singleShot(0, self, lambda m=str(e): QMessageBox.critical(
+                    self, "Import Failed", m))
         threading.Thread(target=_run, daemon=True).start()
 
     def _show_volume(self, name: str) -> None:
         snd = self.sb.sounds.get(name)
         if snd is None:
             return
-        def _save(v: float) -> None:
-            self.sb.set_volume(name, v)
+
+        def _live(v: float) -> None:
+            # In-memory only (no config write per drag tick) — get_mix_frame
+            # reads Sound.volume every frame, so this is audible immediately.
+            with self.sb._sounds_lock:
+                if name in self.sb._sounds:
+                    self.sb._sounds[name].volume = max(0.0, min(1.0, v))
             if name in self._btns:
                 self._btns[name].update()
-        popup = _VolumePopup(name, snd.volume, _save, parent=self)
+
+        def _save(v: float) -> None:
+            self.sb.set_volume(name, v)   # persists to sounds_config.json
+            if name in self._btns:
+                self._btns[name].update()
+
+        popup = _VolumePopup(name, snd.volume, _save, on_live=_live, parent=self)
         popup.show()
 
     def _rename(self, name: str) -> None:
@@ -916,6 +991,7 @@ class SoundBoardWindow(QMainWindow):
     # ── Window events ─────────────────────────────────────────────────────────
 
     def showEvent(self, event) -> None:
+        _apply_dark(self)   # re-assert — DWM can drop it pre-first-show
         if self._snapper:
             QTimer.singleShot(50, lambda: self._snapper.register(
                 "soundboard", self, snap_side="left-only"))

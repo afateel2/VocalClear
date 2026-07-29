@@ -104,9 +104,10 @@ class SnapManager:
     so that b's visible left edge aligns exactly with a's visible right edge.
     """
 
-    SNAP_DIST   = 18   # px — visible-edge proximity to trigger snap
-    UNSNAP_DIST = 40   # px — drag distance to break snap
-    POLL_MS     = 25   # ms — position check interval
+    SNAP_DIST      = 18    # px — visible-edge proximity to trigger snap
+    UNSNAP_DIST    = 40    # px — drag distance to break snap
+    POLL_MS        = 25    # ms — position check interval (visible windows)
+    POLL_HIDDEN_MS = 500   # ms — relaxed interval while a window is hidden
 
     def __init__(self) -> None:
         self._wins:       dict[str, dict]                 = {}
@@ -228,6 +229,16 @@ class SnapManager:
             info = self._wins.get(name)
         if info is None:
             return
+
+        # Hidden windows (e.g. main window closed to tray) can't be dragged —
+        # drop from 40 polls/s to 2/s until the window is visible again.
+        try:
+            if not ctypes.windll.user32.IsWindowVisible(info["hwnd"]):
+                QTimer.singleShot(self.POLL_HIDDEN_MS,
+                                  lambda n=name: self._poll(n))
+                return
+        except Exception:
+            pass
 
         try:
             cur  = _get_rect(info["hwnd"])

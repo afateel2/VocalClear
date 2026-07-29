@@ -275,8 +275,8 @@ class AudioEngine:
             # load — don't clobber last_error which is reserved for startup failures
             self.xrun_count = getattr(self, "xrun_count", 0) + 1
 
-        mono = indata.flatten()
-        self.input_rms = float(np.sqrt(np.mean(mono ** 2)))
+        mono = indata[:, 0]        # contiguous view — no copy
+        self.input_rms = self._rms(mono)
 
         # ── Calibration ───────────────────────────────────────────────────────
         if self._calibrating:
@@ -306,14 +306,14 @@ class AudioEngine:
                              else np.zeros(frames, np.float32))
                 mixed = self._mix_soundboard(mic_frame, frames)
                 mixed = self._apply_gain(mixed)
-                outdata[:] = self._to_out(mixed)
-                self.output_rms = float(np.sqrt(np.mean(mixed ** 2)))
+                self._write_out(outdata, mixed)
+                self.output_rms = self._rms(mixed)
             except queue.Empty:
                 # No mic yet — still mix soundboard so SFX come through
                 sb_only = self._mix_soundboard(np.zeros(frames, np.float32), frames)
                 sb_only = self._apply_gain(sb_only)
-                outdata[:] = self._to_out(sb_only)
-                self.output_rms = float(np.sqrt(np.mean(sb_only ** 2)))
+                self._write_out(outdata, sb_only)
+                self.output_rms = self._rms(sb_only)
             return
 
         # ── RNNoise / Wiener: inline processing (0.5 ms, safe in callback) ───
@@ -326,11 +326,11 @@ class AudioEngine:
                 processed = np.zeros_like(processed)
             mixed     = self._mix_soundboard(processed, frames)
             mixed     = self._apply_gain(mixed)
-            outdata[:] = self._to_out(mixed)
-            self.output_rms = float(np.sqrt(np.mean(mixed ** 2)))
+            self._write_out(outdata, mixed)
+            self.output_rms = self._rms(mixed)
         except Exception as exc:
             self.last_error = str(exc)
-            outdata[:] = self._to_out(mono)
+            self._write_out(outdata, mono)
             self.output_rms = self.input_rms
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -339,12 +339,20 @@ class AudioEngine:
 
     def _ptt_loop(self) -> None:
         import ctypes as _ct
+        _gas = _ct.windll.user32.GetAsyncKeyState
         while self._running:
             enabled = self.config.get("ptt_enabled", False)
             vk      = self.config.get("ptt_vk", 0)
             if enabled and vk:
-                state = _ct.windll.user32.GetAsyncKeyState(int(vk))
-                self._ptt_active = bool(state & 0x8000)
+                down = bool(_gas(int(vk)) & 0x8000)
+                # A combo like CTRL+X must not trigger on bare X — every
+                # captured modifier has to be held together with the key.
+                if down:
+                    for m in self.config.get("ptt_mods") or ():
+                        if not (_gas(int(m)) & 0x8000):
+                            down = False
+                            break
+                self._ptt_active = down
                 time.sleep(0.010)   # 10ms for low-latency key response
             else:
                 self._ptt_active = True   # PTT off → always open
@@ -354,19 +362,26 @@ class AudioEngine:
     # Soundboard mixing helper
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _to_out(self, mono: np.ndarray) -> np.ndarray:
-        """Shape a mono float32 array into (frames, _out_channels) for outdata."""
-        # np.asarray only copies if mono isn't already float32 — callers on the
-        # hot path already pass float32, so this is normally a no-copy cast.
-        mono = np.asarray(mono, dtype=np.float32)
-        if self._out_channels == 1:
-            return mono.reshape(-1, 1)
-        return np.column_stack([mono, mono])
+    @staticmethod
+    def _rms(mono: np.ndarray) -> float:
+        """Dot-product RMS — avoids the mono**2 temp array on the hot path."""
+        n = mono.size
+        return float(np.sqrt(np.dot(mono, mono) / n)) if n else 0.0
+
+    def _write_out(self, outdata: np.ndarray, mono: np.ndarray) -> None:
+        """Copy mono float32 into outdata in place (no column_stack alloc)."""
+        if outdata.shape[1] == 1:
+            outdata[:, 0] = mono
+        else:
+            outdata[:] = mono.reshape(-1, 1)   # broadcasts across channels
 
     def _mix_soundboard(self, mic: np.ndarray, n: int) -> np.ndarray:
         """Add soundboard frame to mic audio. Returns float32 mono array."""
         sb = self._soundboard
-        if sb is None:
+        if sb is None or not sb.has_playing():
+            # Fast path: nothing playing — pass the mic through untouched.
+            # (Previously tanh soft-clip ran unconditionally, compressing
+            # normal speech peaks even with the soundboard idle.)
             return np.asarray(mic, dtype=np.float32)
         sfx = sb.get_mix_frame(n)
         mixed = np.asarray(mic, dtype=np.float32) + sfx
@@ -379,7 +394,9 @@ class AudioEngine:
         gain = self.config.get("output_gain", 1.0)
         if gain == 1.0:
             return audio
-        return np.clip(audio * gain, -1.0, 1.0).astype(np.float32)
+        audio = audio * np.float32(gain)
+        np.clip(audio, -1.0, 1.0, out=audio)
+        return audio
 
     # ──────────────────────────────────────────────────────────────────────────
     # Processing thread — only used for DeepFilterNet
